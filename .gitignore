@@ -1,0 +1,7 @@
+service_account.json
+config_local.py
+image_cache/
+*.pdf
+__pycache__/
+*.pyc
+.venv/
