@@ -4,7 +4,13 @@ Event-specific values (SHEET_ID, COLOR_OVERRIDES) live in config_local.py,
 which is gitignored — copy config_local.example.py to get started.
 """
 
-from config_local import SHEET_ID, COLOR_OVERRIDES
+try:
+    from config_local import SHEET_ID, COLOR_OVERRIDES
+except ImportError:
+    raise SystemExit(
+        "config_local.py not found. Run: cp config_local.example.py config_local.py "
+        "and fill in SHEET_ID (see README.md)."
+    )
 
 # --- Google Sheets (READ-ONLY: never write/update/append to this sheet) ---
 SOURCE_TAB = "Order Here"

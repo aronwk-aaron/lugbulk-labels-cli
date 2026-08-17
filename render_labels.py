@@ -4,7 +4,7 @@ Layout mirrors the reference photo:
     [thumb]  Element ID: 1234567      Qty: 150
              Color
              PART NAME
-             Person Name (bold, larger)
+                Person Name (bold, larger, centered)
 """
 
 import os

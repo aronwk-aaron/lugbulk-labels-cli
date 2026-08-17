@@ -9,7 +9,7 @@ from render_labels import build_pdf
 
 def main():
     if not SHEET_ID:
-        sys.exit("Set SHEET_ID in config.py first.")
+        sys.exit("Set SHEET_ID in config_local.py first (see config_local.example.py).")
 
     records = get_label_records()
     if not records:

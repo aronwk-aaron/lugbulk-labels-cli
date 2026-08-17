@@ -82,15 +82,46 @@ adjust `SOURCE_TAB`, `COL_ELEMENT_ID`, `COL_DESCRIPTION`, `COL_COLOR`,
 .venv/bin/python main.py
 ```
 
-Produces `labels.pdf`, sized for Avery 5160 (1" x 2-5/8", 3 across x 10
-down, 30/sheet, US Letter). When printing, use "Actual size" / 100% scale
-in the print dialog — not "Fit to page" — or the die-cut alignment will
-be off.
+If `config_local.py` is missing, this exits with a message telling you to
+create it (see step 4). Produces `labels.pdf`, sized for Avery 5160
+(1" x 2-5/8", 3 across x 10 down, 30/sheet, US Letter). When printing, use
+"Actual size" / 100% scale in the print dialog — not "Fit to page" — or
+the die-cut alignment will be off.
 
 Part thumbnails are downloaded from LEGO's CDN by Element ID and cached
-in `image_cache/` so re-runs don't re-fetch images already seen.
+in `image_cache/` so re-runs don't re-fetch images already seen. Rows
+with a blank or zero quantity for a given person are skipped — one label
+is only generated per (person, part) pair with qty > 0.
+
+Label text (color, description, person name) auto-shrinks to fit the
+label width, truncating with an ellipsis as a last resort for unusually
+long values.
+
+## Fixing missing/wrong colors
+
+If the sheet's own color lookup is blank or `"unknown"` for a part, add
+an entry to `COLOR_OVERRIDES` in `config_local.py`, keyed by Element ID:
+
+```python
+COLOR_OVERRIDES = {
+    "6584805": "Warm Pink",
+}
+```
+
+This only affects the rendered label — it never writes back to the sheet.
 
 ## Customizing the label size
 
 Other Avery sizes can be added to `LABEL_SPECS` in `config.py`, then
 set `ACTIVE_LABEL_SPEC` to the new key.
+
+## Project files
+
+| File | Purpose |
+|---|---|
+| `main.py` | Entry point — pulls records, builds the PDF |
+| `sheets_source.py` | Reads the sheet (read-only) and pivots it into per-label records |
+| `render_labels.py` | Draws each label (thumbnail, text, layout) and lays out the PDF |
+| `config.py` | Shared/non-sensitive config (tab layout, label spec, output paths) |
+| `config_local.py` | Your sheet ID and color overrides — gitignored |
+| `config_local.example.py` | Template for `config_local.py` |
