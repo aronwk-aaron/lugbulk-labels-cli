@@ -1,4 +1,4 @@
-# sheet-labels
+# lugbulk-label
 
 > **AI disclaimer:** This project was written with assistance from Claude
 > (Anthropic). Review the code before relying on it, especially the Sheets
