@@ -8,7 +8,11 @@ Layout mirrors the reference photo:
 """
 
 import os
+import re
+import time
 import urllib.request
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 from reportlab.graphics import shapes
 from reportlab.graphics.shapes import String
@@ -26,6 +30,11 @@ IMG_SIZE = 16 * mm
 TEXT_LEFT = IMG_SIZE + 3 * mm  # text starts right of the thumbnail
 MARGIN = 2
 
+IMAGE_FETCH_WORKERS = 8
+# A cached miss (404, timeout, etc.) is retried after this long, so a transient
+# CDN outage doesn't permanently blank out a thumbnail.
+MISS_RETRY_SECONDS = 24 * 60 * 60
+
 
 def _cached_image_path(element_id: str, url: str) -> str | None:
     """Download and cache a part thumbnail by element ID. Returns None on failure
@@ -33,7 +42,11 @@ def _cached_image_path(element_id: str, url: str) -> str | None:
     os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
     path = os.path.join(IMAGE_CACHE_DIR, f"{element_id}.jpg")
     if os.path.exists(path):
-        return path if os.path.getsize(path) > 0 else None
+        if os.path.getsize(path) > 0:
+            return path
+        # Empty file = cached miss. Retry it once it's stale enough.
+        if time.time() - os.path.getmtime(path) < MISS_RETRY_SECONDS:
+            return None
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -46,6 +59,14 @@ def _cached_image_path(element_id: str, url: str) -> str | None:
         # Cache the miss as an empty file so we don't re-fetch every run.
         open(path, "wb").close()
         return None
+
+
+def _prefetch_images(records: list[LabelRecord]) -> None:
+    """Warm the image cache for all unique element IDs in parallel, so
+    draw_label's per-label lookups below are just cache hits."""
+    unique = {r.element_id: r.image_url for r in records}
+    with ThreadPoolExecutor(max_workers=IMAGE_FETCH_WORKERS) as pool:
+        list(pool.map(lambda kv: _cached_image_path(*kv), unique.items()))
 
 
 def _fit_string(text: str, font: str, max_size: float, min_size: float, max_width: float):
@@ -103,9 +124,9 @@ def draw_label(label, width, height, record: LabelRecord):
     label.add(String(name_x, height - 46, name_text, fontName=name_font, fontSize=name_size))
 
 
-def build_pdf(records: list[LabelRecord], output_path: str, spec_name: str = ACTIVE_LABEL_SPEC):
+def _specification(spec_name: str) -> "labels.Specification":
     spec = LABEL_SPECS[spec_name]
-    specification = labels.Specification(
+    return labels.Specification(
         spec["sheet_width"], spec["sheet_height"],
         spec["columns"], spec["rows"],
         spec["label_width"], spec["label_height"],
@@ -115,9 +136,39 @@ def build_pdf(records: list[LabelRecord], output_path: str, spec_name: str = ACT
         row_gap=spec["row_gap"], column_gap=spec["column_gap"],
     )
 
-    sheet = labels.Sheet(specification, draw_label, border=False)
+
+def _save_sheet(records: list[LabelRecord], output_path: str, spec_name: str) -> int:
+    sheet = labels.Sheet(_specification(spec_name), draw_label, border=False)
     for record in records:
         sheet.add_label(record)
-
     sheet.save(output_path)
     return sheet.label_count
+
+
+def build_pdf(records: list[LabelRecord], output_path: str, spec_name: str = ACTIVE_LABEL_SPEC):
+    _prefetch_images(records)
+    return _save_sheet(records, output_path, spec_name)
+
+
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^\w\-. ]+")
+
+
+def build_per_person_pdfs(
+    records: list[LabelRecord], output_dir: str, spec_name: str = ACTIVE_LABEL_SPEC
+) -> dict[str, int]:
+    """Split records by person and write one label PDF per person into
+    output_dir. Returns {person: label_count}."""
+    by_person: dict[str, list[LabelRecord]] = defaultdict(list)
+    for r in records:
+        by_person[r.person].append(r)
+
+    _prefetch_images(records)
+
+    os.makedirs(output_dir, exist_ok=True)
+    counts: dict[str, int] = {}
+    for person, person_records in by_person.items():
+        safe_name = _UNSAFE_FILENAME_CHARS.sub("_", person).strip() or "unknown"
+        path = os.path.join(output_dir, f"{safe_name}.pdf")
+        counts[person] = _save_sheet(person_records, path, spec_name)
+
+    return counts

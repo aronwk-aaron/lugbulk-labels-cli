@@ -10,3 +10,7 @@ SHEET_ID = ""
 COLOR_OVERRIDES = {
     # "6584805": "Warm Pink",
 }
+
+# Output PDF filename for this event. Optional — falls back to a generic
+# name in config.py if omitted.
+# OUTPUT_PDF = "ArkLUG-2026-LUGBulk-labels.pdf"

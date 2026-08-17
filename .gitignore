@@ -2,6 +2,10 @@ service_account.json
 config_local.py
 image_cache/
 *.pdf
+labels_by_person/
+manifest.txt
+manifest.csv
+lot_counts.csv
 __pycache__/
 *.pyc
 .venv/

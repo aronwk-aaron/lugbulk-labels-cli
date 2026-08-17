@@ -5,6 +5,7 @@ which is gitignored — copy config_local.example.py to get started.
 """
 
 try:
+    import config_local
     from config_local import SHEET_ID, COLOR_OVERRIDES
 except ImportError:
     raise SystemExit(
@@ -32,8 +33,9 @@ IMAGE_URL_TEMPLATE = (
     "https://www.lego.com/cdn/product-assets/element.img.lod5photo.192x192/{element_id}.jpg"
 )
 
-# --- Label sheet layout (Avery 5160: 1" x 2-5/8", 3 across x 10 down, 30/sheet) ---
+# --- Label sheet layouts, keyed by name; pick one with --label-spec ---
 LABEL_SPECS = {
+    # 1" x 2-5/8", 3 across x 10 down, 30/sheet
     "avery5160": dict(
         sheet_width=215.9, sheet_height=279.4,  # US Letter, mm
         columns=3, rows=10,
@@ -43,9 +45,24 @@ LABEL_SPECS = {
         top_margin=12.7, bottom_margin=12.7,
         row_gap=0, column_gap=3.175,
     ),
+    # 2" x 4", 2 across x 5 down, 10/sheet — more room per label, fewer sheets
+    "avery5163": dict(
+        sheet_width=215.9, sheet_height=279.4,  # US Letter, mm
+        columns=2, rows=5,
+        label_width=101.6, label_height=50.8,  # mm
+        corner_radius=2,
+        left_margin=3.9, right_margin=3.9,
+        top_margin=12.7, bottom_margin=12.7,
+        row_gap=0, column_gap=4.9,
+    ),
 }
 ACTIVE_LABEL_SPEC = "avery5160"
 
 # --- Output ---
-OUTPUT_PDF = "labels.pdf"
+# Event-specific PDF name, if set in config_local.py; otherwise a generic default.
+OUTPUT_PDF = getattr(config_local, "OUTPUT_PDF", "labels.pdf")
 IMAGE_CACHE_DIR = "image_cache"
+MANIFEST_PATH = "manifest.csv"
+LOT_COUNTS_PATH = "lot_counts.csv"
+LOT_COUNTS_PDF_PATH = "lot_counts.pdf"
+PER_PERSON_DIR = "labels_by_person"
