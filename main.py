@@ -9,6 +9,7 @@ from config import (
     LABEL_SPECS, ACTIVE_LABEL_SPEC,
 )
 from sheets_source import validate_sheet
+from xlsx_source import validate_source as validate_xlsx
 from render_labels import build_pdf, build_per_person_pdfs
 from manifest import (
     build_summary, write_manifest_csv, write_lot_counts_csv, write_lot_counts_pdf,
@@ -46,18 +47,36 @@ def parse_args():
         "--sort-by", choices=SORT_CHOICES, default="last",
         help="Sort people by first or last name in reports (default: last).",
     )
+    parser.add_argument(
+        "--source-file", metavar="PATH",
+        help="Read order data from a local .xlsx file instead of the Google "
+             "Sheet (e.g. a downloaded export). Columns are matched by "
+             "header name, so the file's exact layout doesn't need to match "
+             "the live sheet's.",
+    )
+    parser.add_argument(
+        "--output", metavar="PATH",
+        help=f"Output PDF filename for this run, overriding OUTPUT_PDF "
+             f"(default: {OUTPUT_PDF}). Only affects the combined label PDF "
+             f"— --manifest/--lot-counts filenames are unchanged.",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
-    if not SHEET_ID:
-        sys.exit("Set SHEET_ID in config_local.py first (see config_local.example.py).")
+    if args.source_file:
+        records, issues = validate_xlsx(args.source_file)
+        if not records:
+            sys.exit(f"No label records found in '{args.source_file}' — check the tab layout.")
+    else:
+        if not SHEET_ID:
+            sys.exit("Set SHEET_ID in config_local.py first (see config_local.example.py).")
 
-    records, issues = validate_sheet()
-    if not records:
-        sys.exit("No label records found — check SOURCE_TAB and sheet sharing permissions.")
+        records, issues = validate_sheet()
+        if not records:
+            sys.exit("No label records found — check SOURCE_TAB and sheet sharing permissions.")
 
     if args.validate:
         print(build_summary(records, issues, args.label_spec, sort_by=args.sort_by))
@@ -77,8 +96,9 @@ def main():
     if issues:
         print(f"Note: {len(issues)} issue(s) found on the sheet — run with --validate for details.")
 
-    count = build_pdf(records, OUTPUT_PDF, spec_name=args.label_spec)
-    print(f"Wrote {count} labels to {OUTPUT_PDF}")
+    output_pdf = args.output or OUTPUT_PDF
+    count = build_pdf(records, output_pdf, spec_name=args.label_spec)
+    print(f"Wrote {count} labels to {output_pdf}")
 
     if args.per_person:
         counts = build_per_person_pdfs(records, PER_PERSON_DIR, spec_name=args.label_spec)

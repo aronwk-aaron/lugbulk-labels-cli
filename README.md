@@ -119,10 +119,50 @@ long values.
 | `--per-person` | Also write one label PDF per person into `labels_by_person/`, alongside the combined `labels.pdf`. |
 | `--label-spec {avery5160,avery5163}` | Label sheet format to use (default: `avery5160`, 30/sheet). `avery5163` is 2"x4", 10/sheet — more room per label, fewer sheets to buy/feed. |
 | `--sort-by {last,first}` | Sort people by first or last name in `--validate`/`--manifest`/`--lot-counts` output (default: `last`). |
+| `--source-file PATH` | Read order data from a local `.xlsx` file instead of the Google Sheet — see [Using a local .xlsx file instead of the Sheet](#using-a-local-xlsx-file-instead-of-the-sheet). |
+| `--output PATH` | Output PDF filename for this run, overriding `OUTPUT_PDF` (default: the generic `labels.pdf`, or the name set in `config_local.py`). Only affects the combined label PDF — `--manifest`/`--lot-counts` filenames are unchanged. |
 
 Run `--validate` first on a new or freshly-edited sheet — it catches
 data-entry mistakes (like a quantity typed as `"2,ooo"` instead of
 `"2000"`) before you've spent time downloading images and printing.
+
+## Using a local .xlsx file instead of the Sheet
+
+Every command works against a downloaded/exported `.xlsx` copy of the
+order sheet instead of the live Google Sheet — pass `--source-file`:
+
+```
+.venv/bin/python main.py --source-file LUGbulk2026_master.xlsx --validate
+.venv/bin/python main.py --source-file LUGbulk2026_master.xlsx --manifest
+.venv/bin/python main.py --source-file LUGbulk2026_master.xlsx --output Briggs-LUGBulk-labels.pdf
+```
+
+This needs no `config_local.py`/`SHEET_ID`/service account — those are
+only required for the default (no `--source-file`) Google Sheets path.
+Both ways of running coexist; pick whichever fits a given run. Since
+`.xlsx` runs don't go through `config_local.py`, use `--output` (see the
+CLI options table above) to name the label PDF instead of `OUTPUT_PDF` —
+otherwise it falls back to the generic `labels.pdf`/configured default.
+`--manifest` and `--lot-counts` always use their fixed filenames
+(`manifest.csv`/`.txt`, `lot_counts.csv`/`.pdf`) regardless of source;
+rename them afterward if you're running both sources side by side and
+want to keep both sets.
+
+The `.xlsx` reader locates columns by **header name** (`"Element ID"` or
+`"Part Number"`, `"Description"`, `"BL Color"`/`"LEGO Color"`/`"Color"`,
+falling back to whichever candidate actually has data if more than one is
+present) rather than fixed positions, and detects person columns as
+`(name, cost)` column pairs — so it tolerates a different column layout
+than the live sheet (extra leading columns, a shifted header row, a
+renamed tab like `"OrderHere"` vs `"Order Here"`). `COLOR_OVERRIDES` and
+the label-rendering pipeline are shared with the Sheets path, so
+everything downstream (label PDFs, `--manifest`, `--lot-counts`,
+`COLOR_OVERRIDES`) behaves the same either way.
+
+If your export's headers don't match any of the recognized names, either
+rename the header cells in the spreadsheet before exporting, or add the
+export's header text to the `*_HEADERS` tuples at the top of
+`xlsx_source.py`.
 
 ## Fixing missing/wrong colors
 
@@ -151,7 +191,8 @@ per run.
 | File | Purpose |
 |---|---|
 | `main.py` | Entry point and CLI — parses flags, pulls records, dispatches to the right output(s) |
-| `sheets_source.py` | Reads the sheet (read-only), pivots it into per-label records, and flags data issues |
+| `sheets_source.py` | Reads the Google Sheet (read-only), pivots it into per-label records, and flags data issues |
+| `xlsx_source.py` | Same pivot as `sheets_source.py`, for a local `.xlsx` file (`--source-file`); matches columns by header name |
 | `render_labels.py` | Draws each label (thumbnail, text, layout), lays out the PDF, and prefetches images |
 | `manifest.py` | Builds the summary/manifest report and lot-count CSV/PDF |
 | `config.py` | Shared/non-sensitive config (tab layout, label specs, output paths) |
