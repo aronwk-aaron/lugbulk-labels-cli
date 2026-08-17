@@ -1,5 +1,9 @@
 # sheet-labels
 
+> **AI disclaimer:** This project was written with assistance from Claude
+> (Anthropic). Review the code before relying on it, especially the Sheets
+> parsing logic and label layout math.
+
 Reads rows from a Google Sheet (read-only) and renders them onto an
 Avery 5160-style label sheet PDF, ready to print. Built for pivoting a
 "one column per person" order sheet into individual part-request labels
