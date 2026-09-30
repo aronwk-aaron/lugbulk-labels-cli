@@ -1,5 +1,5 @@
 google-api-python-client>=2.100.0
 google-auth>=2.23.0
-openpyxl>=3.1.0
-pylabels>=1.2.0
-reportlab>=4.0.0
+openpyxl>=3.1.5
+pylabels>=1.2.1
+reportlab>=5.0.1
