@@ -20,8 +20,13 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from dataclasses import dataclass
+from functools import partial
+
 from reportlab.graphics import shapes
+from reportlab.graphics.barcode.qr import QrCodeWidget
 from reportlab.graphics.shapes import String
+from reportlab.lib.colors import Color
 from reportlab.pdfbase.pdfmetrics import stringWidth
 import labels
 
@@ -214,29 +219,33 @@ def _backdrop_image(src_path: str, trans: bool, light_color: bool) -> str:
     return out_path
 
 
-_image_choice: dict[str, str | None] = {}  # element_id -> image to draw
+_image_choice: dict[tuple[str, bool], str | None] = {}  # (element_id, backdrop) -> image
 
 
-def _label_image(record: LabelRecord) -> str | None:
-    if record.element_id in _image_choice:
-        return _image_choice[record.element_id]
+def _label_image(record: LabelRecord, backdrop: bool = True) -> str | None:
+    key = (record.element_id, backdrop)
+    if key in _image_choice:
+        return _image_choice[key]
     path = _cached_image_path(record.element_id, record.image_url)
-    if path:
+    if path and backdrop:
         try:
             path = _backdrop_image(path, colors.is_transparent(record.lego_color, record.bl_color),
                                    colors.is_light(record.lego_color, record.bl_color))
         except Exception:
             pass  # unreadable image: draw_label skips it
-    _image_choice[record.element_id] = path
+    _image_choice[key] = path
     return path
 
 
-def _prefetch_images(records: list[LabelRecord]) -> None:
+def _prefetch_images(records: list[LabelRecord], opts: "LabelOptions") -> None:
     """Warm the image cache for all unique parts in parallel, so draw_label's
     per-label lookups are just cache hits."""
+    if not opts.show("photo"):
+        return
     unique = {r.element_id: r for r in records}
+    backdrop = opts.show("backdrop")
     with ThreadPoolExecutor(max_workers=IMAGE_FETCH_WORKERS) as pool:
-        list(pool.map(_label_image, unique.values()))
+        list(pool.map(lambda r: _label_image(r, backdrop), unique.values()))
 
 
 def _fit_string(text: str, font: str, max_size: float, min_size: float, max_width: float):
@@ -255,40 +264,100 @@ def _fit_string(text: str, font: str, max_size: float, min_size: float, max_widt
     return (truncated + "…" if truncated else text), size
 
 
-def _layout(width: float, height: float) -> dict:
+# Parts of a label that can be switched on and off (--hide / the web
+# preview's switches). All on by default except the QR code.
+LABEL_PARTS = ("photo", "element_id", "qty", "lego_color", "bl_color", "description",
+               "name", "count", "backdrop", "swatch", "qr")
+DEFAULT_HIDDEN = frozenset({"qr"})
+
+
+@dataclass(frozen=True)
+class LabelOptions:
+    hidden: frozenset = DEFAULT_HIDDEN
+
+    def show(self, part: str) -> bool:
+        return part not in self.hidden
+
+    @classmethod
+    def parse(cls, hide: str | None, show: str | None = None) -> "LabelOptions":
+        """From comma lists of parts to hide / show (on top of the defaults).
+        Raises ValueError naming an unknown part."""
+        hidden = set(DEFAULT_HIDDEN)
+        for items, add in ((hide, True), (show, False)):
+            for part in filter(None, (p.strip() for p in (items or "").split(","))):
+                if part not in LABEL_PARTS:
+                    raise ValueError(f"unknown label part '{part}' (choose from "
+                                     f"{', '.join(LABEL_PARTS)})")
+                (hidden.add if add else hidden.discard)(part)
+        return cls(frozenset(hidden))
+
+
+def bricklink_url(element_id: str) -> str:
+    """Where a label's QR code points: BrickLink's search, which resolves
+    LEGO element IDs to the right part and color."""
+    return f"https://www.bricklink.com/v2/search.page?q={element_id}"
+
+
+def _layout(width: float, height: float, opts: LabelOptions, n_lines: int) -> dict:
     """Positions and font sizes (points) scaled to the label's height, so
-    every label size gets the same proportions."""
+    every label size gets the same proportions. Parts that are switched off
+    free their space: lines stack up, and without a photo the text uses the
+    full width. Mirrored in lugbulk-labels-web's labels_pdf.cpp."""
     pad = min(height * 0.07, 9)
     inner = height - 2 * pad
     id_size = min(inner * 0.20, 26)
     small = min(inner * 0.12, 15)
     name_size = min(inner * 0.22, 30)
+    top_row = opts.show("element_id") or opts.show("qty")
+    name_row = opts.show("name") or opts.show("count")
 
     y_id = height - pad - id_size * 0.8
-    y_lego = y_id - id_size * 0.2 - small * 1.25
-    y_bl = y_lego - small * 1.2
-    y_desc = y_bl - small * 1.2
+    first = (y_id - id_size * 0.2 - small * 1.25) if top_row else (height - pad - small * 0.85)
+    lines = [first - i * small * 1.2 for i in range(n_lines)]
+    last_text = lines[-1] if lines else (y_id if top_row else height - pad)
+
     # On taller labels, lift the name toward the text block rather than
     # leaving it stranded at the bottom edge.
     y_name = pad + name_size * 0.22
-    slack = (y_desc - small * 0.3) - (y_name + name_size * 0.75)
-    lift = max(0.0, slack) * 0.45
-    y_name += lift
-    img = min(inner - name_size * 1.3 - lift, width * 0.32)
+    lift = 0.0
+    if name_row:
+        slack = (last_text - small * 0.3) - (y_name + name_size * 0.75)
+        lift = max(0.0, slack) * 0.45
+        y_name += lift
+    art_height = inner - (name_size * 1.3 + lift if name_row else 0)
+    img = min(art_height, width * 0.32) if opts.show("photo") else 0.0
+    qr = min(art_height * 0.85, width * 0.17) if opts.show("qr") else 0.0
     return dict(
-        pad=pad, img=img, text_x=pad + img + pad * 0.8,
+        pad=pad, img=img, qr=qr, text_x=pad + img + pad * 0.8 if img else pad,
+        text_right=width - pad - (qr + pad * 0.8 if qr else 0),
         id_size=id_size, small=small, name_size=name_size,
-        y_id=y_id, y_lego=y_lego, y_bl=y_bl, y_desc=y_desc, y_name=y_name,
+        y_id=y_id, lines=lines, y_name=y_name,
     )
 
 
-def draw_label(label, width, height, record: LabelRecord):
+def _qr(label, x: float, y: float, size: float, data: str) -> None:
+    widget = QrCodeWidget(data, barLevel="M", barBorder=0)
+    x0, y0, x1, y1 = widget.getBounds()
+    sx, sy = size / (x1 - x0), size / (y1 - y0)
+    group = widget.draw()
+    group.transform = (sx, 0, 0, sy, x - x0 * sx, y - y0 * sy)
+    label.add(group)
+
+
+def draw_label(label, width, height, record: LabelRecord, opts: LabelOptions = LabelOptions()):
     # NOTE: width/height (from pylabels) are in points, like every
     # coordinate here — never mix in raw mm values.
-    L = _layout(width, height)
+    color_lines = []
+    if opts.show("lego_color") and record.lego_color:
+        color_lines.append(f"LEGO: {record.lego_color}")
+    if opts.show("bl_color") and record.bl_color:
+        color_lines.append(f"BL: {record.bl_color}")
+    texts = color_lines + ([record.description]
+                           if opts.show("description") and record.description else [])
+    L = _layout(width, height, opts, len(texts))
     pad, small = L["pad"], L["small"]
 
-    img_path = _label_image(record)
+    img_path = _label_image(record, opts.show("backdrop")) if L["img"] else None
     if img_path:
         try:
             with Image.open(img_path) as im:
@@ -296,42 +365,70 @@ def draw_label(label, width, height, record: LabelRecord):
             label.add(shapes.Image(pad, height - pad - L["img"], L["img"], L["img"], img_path))
         except Exception:
             pass
+    if L["qr"]:
+        _qr(label, width - pad - L["qr"], height - pad - L["qr"], L["qr"],
+            bricklink_url(record.element_id))
 
-    text_x = L["text_x"]
-    text_max = width - pad - text_x
+    text_x, right = L["text_x"], L["text_right"]
+    text_max = right - text_x
 
-    qty_text = f"Qty: {record.qty}"
-    qty_size = L["id_size"] * 0.85
-    qty_w = stringWidth(qty_text, "Helvetica-Bold", qty_size)
-    label.add(String(width - pad - qty_w, L["y_id"], qty_text,
-                      fontName="Helvetica-Bold", fontSize=qty_size))
+    # Element ID and qty share the top row. Shrink both together until they
+    # fit — the ID must never be cut short.
+    id_text = record.element_id if opts.show("element_id") else ""
+    qty_text = f"Qty: {record.qty}" if opts.show("qty") else ""
+    scale = 1.0
 
-    id_text, id_size = _fit_string(record.element_id, "Helvetica-Bold", L["id_size"],
-                                    L["id_size"] * 0.6, text_max - qty_w - pad)
-    label.add(String(text_x, L["y_id"], id_text, fontName="Helvetica-Bold", fontSize=id_size))
+    def row_width(k: float) -> float:
+        return (stringWidth(id_text, "Helvetica-Bold", L["id_size"] * k)
+                + stringWidth(qty_text, "Helvetica-Bold", L["id_size"] * 0.85 * k)
+                + (pad if id_text and qty_text else 0))
 
-    for y, text in ((L["y_lego"], f"LEGO: {record.lego_color}" if record.lego_color else ""),
-                    (L["y_bl"], f"BL: {record.bl_color}" if record.bl_color else ""),
-                    (L["y_desc"], record.description)):
-        if text:
-            fitted, size = _fit_string(text, "Helvetica", small, small * 0.7, text_max)
-            label.add(String(text_x, y, fitted, fontName="Helvetica", fontSize=size))
+    while scale > 0.4 and row_width(scale) > text_max:
+        scale -= 0.05
+    if qty_text:
+        qty_size = L["id_size"] * 0.85 * scale
+        label.add(String(right - stringWidth(qty_text, "Helvetica-Bold", qty_size), L["y_id"],
+                          qty_text, fontName="Helvetica-Bold", fontSize=qty_size))
+    if id_text:
+        label.add(String(text_x, L["y_id"], id_text, fontName="Helvetica-Bold",
+                          fontSize=L["id_size"] * scale))
+
+    # Swatch: a square of the part's color beside the color name lines.
+    swatch_w = 0.0
+    rgb = colors.swatch_rgb(record.lego_color, record.bl_color) if opts.show("swatch") else None
+    if rgb and color_lines:
+        lines_span = small * 1.2 * (len(color_lines) - 1)
+        side = lines_span + small * 0.95
+        bottom = L["lines"][len(color_lines) - 1] - small * 0.22
+        label.add(shapes.Rect(text_x, bottom, side, side, strokeColor=Color(0.35, 0.35, 0.35),
+                              strokeWidth=0.5, fillColor=Color(*rgb)))
+        if colors.is_transparent(record.lego_color, record.bl_color):
+            # Mark see-through colors with a diagonal, like a pane of glass.
+            label.add(shapes.Line(text_x, bottom, text_x + side, bottom + side,
+                                  strokeColor=Color(0.35, 0.35, 0.35), strokeWidth=0.5))
+        swatch_w = side + pad * 0.5
+
+    for i, (y, text) in enumerate(zip(L["lines"], texts)):
+        x = text_x + (swatch_w if i < len(color_lines) else 0)
+        fitted, size = _fit_string(text, "Helvetica", small, small * 0.7, right - x)
+        label.add(String(x, y, fitted, fontName="Helvetica", fontSize=size))
 
     counter_w = 0.0
-    if record.part_total:
+    if opts.show("count") and record.part_total:
         counter = f"{record.part_seq} of {record.part_total}"
         counter_w = stringWidth(counter, "Helvetica-Bold", small)
         label.add(String(width - pad - counter_w, L["y_name"], counter,
                           fontName="Helvetica-Bold", fontSize=small))
 
-    # Centered on the label; kept clear of the counter on both sides so it
-    # stays visually centered.
-    name_max = width - 2 * pad - 2 * (counter_w + pad)
-    name_text, name_size = _fit_string(record.person, "Helvetica-Bold", L["name_size"],
-                                        L["name_size"] * 0.55, name_max)
-    name_x = (width - stringWidth(name_text, "Helvetica-Bold", name_size)) / 2
-    label.add(String(name_x, L["y_name"], name_text, fontName="Helvetica-Bold",
-                      fontSize=name_size))
+    if opts.show("name"):
+        # Centered on the label; kept clear of the counter on both sides so
+        # it stays visually centered.
+        name_max = width - 2 * pad - 2 * (counter_w + pad)
+        name_text, name_size = _fit_string(record.person, "Helvetica-Bold", L["name_size"],
+                                            L["name_size"] * 0.55, name_max)
+        name_x = (width - stringWidth(name_text, "Helvetica-Bold", name_size)) / 2
+        label.add(String(name_x, L["y_name"], name_text, fontName="Helvetica-Bold",
+                          fontSize=name_size))
 
 
 def _specification(spec_name: str) -> "labels.Specification":
@@ -349,24 +446,27 @@ def _specification(spec_name: str) -> "labels.Specification":
     )
 
 
-def _save_sheet(records: list[LabelRecord], output_path: str, spec_name: str) -> int:
-    sheet = labels.Sheet(_specification(spec_name), draw_label, border=False)
+def _save_sheet(records: list[LabelRecord], output_path: str, spec_name: str,
+                opts: LabelOptions) -> int:
+    sheet = labels.Sheet(_specification(spec_name), partial(draw_label, opts=opts), border=False)
     for record in records:
         sheet.add_label(record)
     sheet.save(output_path)
     return sheet.label_count
 
 
-def build_pdf(records: list[LabelRecord], output_path: str, spec_name: str = ACTIVE_LABEL_SPEC):
-    _prefetch_images(records)
-    return _save_sheet(records, output_path, spec_name)
+def build_pdf(records: list[LabelRecord], output_path: str, spec_name: str = ACTIVE_LABEL_SPEC,
+              opts: LabelOptions = LabelOptions()):
+    _prefetch_images(records, opts)
+    return _save_sheet(records, output_path, spec_name, opts)
 
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^\w\-. ]+")
 
 
 def build_per_person_pdfs(
-    records: list[LabelRecord], output_dir: str, spec_name: str = ACTIVE_LABEL_SPEC
+    records: list[LabelRecord], output_dir: str, spec_name: str = ACTIVE_LABEL_SPEC,
+    opts: LabelOptions = LabelOptions(),
 ) -> dict[str, int]:
     """Split records by person and write one label PDF per person into
     output_dir. Returns {person: label_count}."""
@@ -374,7 +474,7 @@ def build_per_person_pdfs(
     for r in records:
         by_person[r.person].append(r)
 
-    _prefetch_images(records)
+    _prefetch_images(records, opts)
 
     os.makedirs(output_dir, exist_ok=True)
     counts: dict[str, int] = {}
@@ -387,6 +487,31 @@ def build_per_person_pdfs(
             candidate, n = f"{safe_name}_{n}", n + 1
         used_names.add(candidate.lower())
         counts[person] = _save_sheet(person_records, os.path.join(output_dir, f"{candidate}.pdf"),
-                                     spec_name)
+                                     spec_name, opts)
 
     return counts
+
+
+def build_test_page(output_path: str, spec_name: str) -> None:
+    """One page with every label position outlined and labelled with its
+    size, to print on plain paper and hold up against the label stock
+    before printing the real thing."""
+    spec = LABEL_SPECS[spec_name]
+
+    def draw(label, width, height, index):
+        label.add(shapes.Rect(0.5, 0.5, width - 1, height - 1, rx=4, ry=4, fillColor=None,
+                              strokeColor=Color(0, 0, 0), strokeWidth=0.75))
+        mid_x, mid_y = width / 2, height / 2
+        for x1, y1, x2, y2 in ((mid_x - 6, mid_y, mid_x + 6, mid_y),
+                               (mid_x, mid_y - 6, mid_x, mid_y + 6)):
+            label.add(shapes.Line(x1, y1, x2, y2, strokeColor=Color(0, 0, 0), strokeWidth=0.5))
+        size = min(height * 0.12, 10)
+        text = (f"{spec['brand']} {spec['part']} #{index}  "
+                f"{spec['label_height_mm'] / 25.4:.2f}\" x {spec['label_width_mm'] / 25.4:.2f}\"")
+        label.add(String(width / 2, mid_y - size * 2.2, text, fontName="Helvetica",
+                          fontSize=size, textAnchor="middle"))
+
+    sheet = labels.Sheet(_specification(spec_name), draw, border=False)
+    for i in range(spec["columns"] * spec["rows"]):
+        sheet.add_label(i + 1)
+    sheet.save(output_path)

@@ -9,10 +9,13 @@ that produced (or would produce) the label PDF.
 import csv
 from collections import Counter
 
+from reportlab.graphics.shapes import Drawing, Rect
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.platypus import (
+    PageBreak, SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
+)
 from reportlab.lib.styles import getSampleStyleSheet
 
 from config import LABEL_SPECS
@@ -142,6 +145,48 @@ def write_lot_counts_pdf(records: list[LabelRecord], path: str, sort_by: str = "
     table = Table(data, colWidths=[100 * mm, 30 * mm, 40 * mm], repeatRows=1)
     table.setStyle(_TABLE_STYLE)
     story.append(table)
+    _build_doc(path, story)
+
+
+def _checkbox() -> Drawing:
+    box = Drawing(10, 10)
+    box.add(Rect(0, 0, 10, 10, fillColor=None, strokeColor=colors.black, strokeWidth=0.8))
+    return box
+
+
+def write_checklist_pdf(records: list[LabelRecord], path: str, sort_by: str = "last") -> None:
+    """Packing checklist: one page per person (in name order) listing their
+    parts in label order, with a box to tick as each bag goes in."""
+    styles = getSampleStyleSheet()
+    cell = styles["BodyText"].clone("cell", fontSize=9, leading=11)
+    by_person: dict[str, list[LabelRecord]] = {}
+    for r in records:
+        by_person.setdefault(r.person, []).append(r)
+
+    story = []
+    for n, person in enumerate(sorted(by_person, key=lambda p: person_sort_key(p, sort_by))):
+        items = by_person[person]
+        pieces = sum(float(r.qty) for r in items)
+        if n:
+            story.append(PageBreak())
+        story += [
+            Paragraph(_xml_escape(person), styles["Title"]),
+            Paragraph(f"{len(items)} lots, {pieces:g} pieces", styles["Normal"]),
+            Spacer(1, 5 * mm),
+        ]
+        data = [["", "Element", "Description", "LEGO / BrickLink color", "Qty", "Label"]]
+        for r in items:
+            data.append([
+                _checkbox(), r.element_id, Paragraph(_xml_escape(r.description), cell),
+                Paragraph(_xml_escape(" / ".join(c for c in (r.lego_color, r.bl_color) if c)), cell),
+                r.qty, f"{r.part_seq} of {r.part_total}" if r.part_total else "",
+            ])
+        table = Table(data, colWidths=[9 * mm, 20 * mm, 58 * mm, 52 * mm, 16 * mm, 20 * mm],
+                      repeatRows=1)
+        table.setStyle(_TABLE_STYLE)
+        story.append(table)
+    if not story:
+        story.append(Paragraph("No orders.", styles["Normal"]))
     _build_doc(path, story)
 
 
