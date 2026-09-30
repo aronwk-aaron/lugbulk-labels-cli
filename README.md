@@ -327,3 +327,15 @@ cp label_specs.json ../lugbulk-labels-web/data/   # keep the web app in step
 | `version.py` | Build version, rewritten by CI |
 | `.github/workflows/build.yml` | CI: tests, standalone binaries, canary and versioned releases |
 | `config_local.example.py` | Template for `config_local.py` |
+
+## License
+
+Copyright (C) 2026 Aaron Kimbrell.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, version 3 or (at your option) any later version. It is
+distributed WITHOUT ANY WARRANTY; see [LICENSE](LICENSE) for the full terms.
+
+The label stock inventory in `label_specs.json` comes from the gLabels
+template database, used under the MIT license (notice kept in the file).
