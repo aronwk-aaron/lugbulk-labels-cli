@@ -129,3 +129,40 @@ def is_light(lego: str, bl: str) -> bool:
     """True for white-family colors (White, Glow In Dark White, ...), which
     are hard to see on LEGO's white-background product shots."""
     return any("WHITE" in _key(name or "") for name in (lego, bl))
+
+
+# Approximate sRGB of each LEGO color (from BrickLink/Rebrickable swatches),
+# for the color swatch printed on labels. Keyed by LEGO name as in COLORS.
+RGB: dict[str, str] = {
+    "White": "FFFFFF", "Black": "1B1B1B", "Bright Red": "C91A09", "Bright Blue": "0055BF",
+    "Bright Yellow": "F2CD37", "Bright Green": "4B9F4A", "Dark Green": "237841",
+    "Earth Green": "184632", "Earth Blue": "0A3463", "Medium Stone Grey": "A0A5A9",
+    "Dark Stone Grey": "6C6E68", "Brick Yellow": "E4CD9E", "Sand Yellow": "958A73",
+    "Reddish Brown": "582A12", "Dark Brown": "352100", "New Dark Red": "720E0F",
+    "Sand Green": "A0BCAC", "Sand Blue": "6074A1", "Olive Green": "9B9A5A",
+    "Nougat": "D09168", "Medium Nougat": "AA7D55", "Light Nougat": "F6D7B3",
+    "Dark Orange": "A95500", "Bright Orange": "FE8A18", "Reddish Orange": "CA4C0B",
+    "Flame Yellowish Orange": "F8BB3D", "Bright Yellowish Green": "BBE90B",
+    "Bright Bluish Green": "008F9B", "Aqua": "ADC3C0", "Lavender": "E1D5ED",
+    "Medium Lavender": "AC78BA", "Medium Lilac": "3F3691", "Bright Reddish Violet": "923978",
+    "Bright Purple": "C870A0", "Light Purple": "E4ADC8", "Medium Blue": "5A93DB",
+    "Medium Azur": "36AEBF", "Dark Azur": "078BC9", "Light Royal Blue": "9FC3E9",
+    "Cool Yellow": "FFF03A", "Vibrant Coral": "FF698F", "Warm Pink": "F7A1B8",
+    "Spring Yellowish Green": "DFEEA5", "Silver Metallic": "898788",
+    "Titanium Metallic": "575857", "Warm Gold": "AA7F2E", "White Glow": "D9E4A7",
+    "Transparent": "EEEEEE", "Transparent Light Blue": "AEEFEC", "Transparent Blue": "0020A0",
+    "Transparent Brown": "635F52", "Transparent Red": "C91A09", "Transparent Green": "237841",
+    "Transparent Yellow": "F5CD2F", "Transparent Bright Orange": "F08F1C",
+    "Transparent Fluorescent Reddish Orange": "FF800D",
+    "Transparent Fluorescent Green": "F8F184",
+}
+
+
+def swatch_rgb(lego: str, bl: str) -> tuple[float, float, float] | None:
+    """(r, g, b) in 0..1 for a label's color swatch, or None if unknown."""
+    for table, name in ((_BY_LEGO, lego), (_BY_BL, bl), (_BY_LEGO, bl)):
+        hit = table.get(_key(name or ""))
+        if hit and hit[0] in RGB:
+            h = RGB[hit[0]]
+            return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    return None

@@ -6,17 +6,19 @@ from collections import Counter
 
 from config import (
     SHEET_ID, OUTPUT_PDF, MANIFEST_PATH, LOT_COUNTS_PATH, LOT_COUNTS_PDF_PATH, PER_PERSON_DIR,
-    PARTS_PATH, PARTS_PDF_PATH, LABEL_SPECS, ACTIVE_LABEL_SPEC, WEIGHT_OVERRIDES, find_label_spec,
+    PARTS_PATH, PARTS_PDF_PATH, CHECKLIST_PDF_PATH, TEST_PAGE_PATH, LABEL_SPECS, ACTIVE_LABEL_SPEC, WEIGHT_OVERRIDES, find_label_spec,
     BRICKLINK_CREDENTIALS,
 )
 import bricklink
 from version import __version__
 import colors
-from render_labels import build_pdf, build_per_person_pdfs
+from render_labels import (
+    LABEL_PARTS, LabelOptions, build_pdf, build_per_person_pdfs, build_test_page,
+)
 from ordering import PART_ORDERS, order_records, summarize_parts
 from manifest import (
     build_summary, write_manifest_csv, write_lot_counts_csv, write_lot_counts_pdf,
-    write_parts_csv, write_parts_pdf, person_sort_key, SORT_CHOICES,
+    write_checklist_pdf, write_parts_csv, write_parts_pdf, person_sort_key, SORT_CHOICES,
 )
 
 
@@ -66,6 +68,31 @@ def parse_args():
              f"part number works; see --list-labels.",
     )
     parser.add_argument(
+        "--hide", metavar="PARTS", default="",
+        help=f"Comma-separated label parts to leave off: {', '.join(LABEL_PARTS)}. "
+             f"Everything but qr is on by default.",
+    )
+    parser.add_argument(
+        "--show", metavar="PARTS", default="",
+        help="Comma-separated label parts to turn on, e.g. --show qr for a QR code "
+             "linking to the part on BrickLink.",
+    )
+    parser.add_argument(
+        "--sample", action="store_true",
+        help="Use built-in sample orders instead of a sheet — for trying out a "
+             "label design (--hide/--show/--label-spec) before a real run.",
+    )
+    parser.add_argument(
+        "--checklist", action="store_true",
+        help=f"Also write {CHECKLIST_PDF_PATH}: one page per person listing their parts "
+             "with tick boxes, for packing.",
+    )
+    parser.add_argument(
+        "--test-page", action="store_true",
+        help=f"Write {TEST_PAGE_PATH} — the label outlines for --label-spec, to print "
+             "on plain paper and check printer alignment — and exit.",
+    )
+    parser.add_argument(
         "--list-labels", action="store_true",
         help="List every supported Avery and Dymo label stock and exit.",
     )
@@ -92,6 +119,10 @@ def parse_args():
              f"— --manifest/--lot-counts filenames are unchanged.",
     )
     args = parser.parse_args()
+    try:
+        args.label_options = LabelOptions.parse(args.hide, args.show)
+    except ValueError as e:
+        parser.error(str(e))
     if not args.list_labels:
         spec = find_label_spec(args.label_spec)
         if spec is None:
@@ -144,8 +175,17 @@ def main():
         list_labels()
         return
 
+    if args.test_page:
+        build_test_page(TEST_PAGE_PATH, args.label_spec)
+        print(f"Wrote {TEST_PAGE_PATH} — print it at 100% scale on plain paper and hold it "
+              f"against a sheet of {args.label_spec} labels")
+        return
+
     # Imported here so --help works without the Google/openpyxl deps.
-    if args.source_file:
+    if args.sample:
+        from samples import sample_records
+        records, issues = sample_records(), []
+    elif args.source_file:
         from xlsx_source import validate_source as validate_xlsx
         records, issues = validate_xlsx(args.source_file)
         if not records:
@@ -161,7 +201,7 @@ def main():
             sys.exit("No label records found — check SOURCE_TAB and sheet sharing permissions.")
 
     bl_weights = {}
-    if BRICKLINK_CREDENTIALS and not args.no_bricklink:
+    if BRICKLINK_CREDENTIALS and not args.no_bricklink and not args.sample:
         bl_weights = apply_bricklink(records, issues)
 
     records = order_records(records, WEIGHT_OVERRIDES, args.part_order,
@@ -195,12 +235,18 @@ def main():
         print(f"Note: {len(issues)} issue(s) found on the sheet — run with --validate for details.")
 
     output_pdf = args.output or OUTPUT_PDF
-    count = build_pdf(records, output_pdf, spec_name=args.label_spec)
+    count = build_pdf(records, output_pdf, spec_name=args.label_spec,
+                      opts=args.label_options)
     print(f"Wrote {count} labels to {output_pdf}")
 
     if args.per_person:
-        counts = build_per_person_pdfs(records, PER_PERSON_DIR, spec_name=args.label_spec)
+        counts = build_per_person_pdfs(records, PER_PERSON_DIR, spec_name=args.label_spec,
+                                       opts=args.label_options)
         print(f"Wrote {len(counts)} per-person PDFs to {PER_PERSON_DIR}/")
+
+    if args.checklist:
+        write_checklist_pdf(records, CHECKLIST_PDF_PATH, sort_by=args.sort_by)
+        print(f"Wrote {CHECKLIST_PDF_PATH}")
 
     if args.manifest:
         summary_path = MANIFEST_PATH.rsplit(".", 1)[0] + ".txt"

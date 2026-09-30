@@ -184,6 +184,10 @@ the other is looked up in `colors.py`. A color it doesn't know shows as an
 | `--validate` | Check the sheet for data problems (duplicate person+part entries, non-numeric qty, bad element IDs, missing/unmapped colors, missing description) and print a report, including the part order. Doesn't download images or write a PDF — fast pre-flight check before a real run. |
 | `--manifest` | Also write `manifest.txt` (per-person and per-part totals, sheet-capacity estimate, any issues found) and `manifest.csv` (one row per label, for spot-checking in a spreadsheet). |
 | `--lot-counts` | Print, and write to `lot_counts.csv` and `lot_counts.pdf`, each person's lot count (number of labels/line items) and total pieces. No images needed. |
+| `--hide PARTS` / `--show PARTS` | Switch label parts off/on: `photo`, `element_id`, `qty`, `lego_color`, `bl_color`, `description`, `name`, `count`, `backdrop` (gray tile behind clear/white parts), `swatch` (color square), `qr` (QR code to the part on BrickLink — off by default). Hidden parts free their space. |
+| `--sample` | Use built-in sample orders instead of a sheet — try a design (`--hide`/`--show`/`--label-spec`) without a sheet. |
+| `--checklist` | Also write `checklist.pdf`: a packing checklist, one page per person, with a tick box per bag. |
+| `--test-page` | Write `alignment_test.pdf` — the label outlines for `--label-spec` — to print on plain paper and hold against the label stock, then exit. |
 | `--parts` | Write `parts.csv` and `parts.pdf`: one row per part, in label order, with total pieces, how many people ordered it, and its weight. No images needed; combine with `--lot-counts` for both. |
 | `--part-order {heaviest,lightest,sheet}` | Order of parts on the labels and parts list (default: `heaviest`). |
 | `--per-person` | Also write one label PDF per person into `labels_by_person/`, alongside the combined `labels.pdf`. |
@@ -318,6 +322,7 @@ cp label_specs.json ../lugbulk-labels-web/data/   # keep the web app in step
 | `pivot.py` | Turns either source's rows into per-label records, flagging data issues |
 | `records.py` | The record/issue types, element ID validation, color override handling |
 | `colors.py` | LEGO <-> BrickLink color name table |
+| `samples.py` | Built-in sample orders for `--sample` (and the web preview) |
 | `ordering.py` | Part weight estimates, label order, "N of M" numbering, per-part summaries |
 | `bricklink.py` | BrickLink API client (OAuth 1.0) and lookup cache — weights and colors |
 | `render_labels.py` | Draws each label (thumbnail, text, layout), lays out the PDF, prefetches and outlines images |
