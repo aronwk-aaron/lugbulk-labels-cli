@@ -251,20 +251,68 @@ def _prefetch_images(records: list[LabelRecord], opts: "LabelOptions") -> None:
         list(pool.map(lambda r: _label_image(r, backdrop), unique.values()))
 
 
-def _fit_string(text: str, font: str, max_size: float, min_size: float, max_width: float):
-    """Shrink font size to fit text within max_width; truncate with an ellipsis
-    as a last resort if even min_size doesn't fit."""
+# Helvetica's cap height and descender, as fractions of the font size, and
+# the baseline-to-baseline distance of wrapped lines.
+CAP_HEIGHT = 0.72
+DESCENDER = 0.22
+LEADING = 1.1
+
+
+def _wrap_lines(text: str, max_width: float, width) -> list[str]:
+    """Break text into lines no wider than max_width as width(line) measures
+    them, at spaces; a word wider than a whole line is split between
+    characters as a last resort. Nothing is dropped but the spaces lines
+    break at. Always at least one line. As lugbulk-labels-web's
+    pdf_text::wrap_lines."""
+    lines: list[str] = []
+    line = ""
+    for word in text.split(" "):
+        candidate = f"{line} {word}" if line else word
+        if width(candidate) <= max_width:
+            line = candidate
+            continue
+        if line:
+            lines.append(line)
+            line = ""
+            if width(word) <= max_width:
+                line = word
+                continue
+        while word:  # split by characters, at least one a line
+            n = 1
+            while n < len(word) and width(word[:n + 1]) <= max_width:
+                n += 1
+            if n == len(word):
+                break
+            lines.append(word[:n])
+            word = word[n:]
+        line = word
+    if line or not lines:
+        lines.append(line)
+    return lines
+
+
+def _fit_text(text: str, font: str, max_size: float, min_size: float, max_width: float,
+              max_height: float) -> tuple[list[str], float, float]:
+    """Fit text into a field max_width wide: one line, shrunk from max_size
+    down to min_size in half-point steps, when that fits (drawn exactly as
+    before). Otherwise it wraps onto more lines and shrinks further until
+    the lines fit max_height (cap height of the first line to the
+    descenders of the last). Nothing is ever cut off. Returns the lines,
+    the font size and the distance between baselines. As
+    lugbulk-labels-web's labels_pdf::fit_text."""
     size = max_size
     while size > min_size and stringWidth(text, font, size) > max_width:
         size -= 0.5
     if stringWidth(text, font, size) <= max_width:
-        return text, size
+        return [text], size, size * LEADING
 
     size = min_size
-    truncated = text
-    while truncated and stringWidth(truncated + "…", font, size) > max_width:
-        truncated = truncated[:-1]
-    return (truncated + "…" if truncated else text), size
+    while True:
+        lines = _wrap_lines(text, max_width, lambda t: stringWidth(t, font, size))
+        height = size * (CAP_HEIGHT + DESCENDER) + (len(lines) - 1) * size * LEADING
+        if height <= max_height or size <= 0.1:
+            return lines, size, size * LEADING
+        size = max(0.1, size - 0.25 if size > 2 else size * 0.9)
 
 
 # Parts of a label that can be switched on and off (--hide / the web
@@ -388,6 +436,8 @@ def draw_label(label, width, height, record: LabelRecord, opts: LabelOptions = L
 
     while scale > 0.4 and row_width(scale) > text_max:
         scale -= 0.05
+    while scale > 0.01 and row_width(scale) > text_max:  # past that, shrink rather than overlap
+        scale *= 0.9
     if qty_text:
         qty_size = L["id_size"] * 0.85 * scale
         label.add(String(right - stringWidth(qty_text, "Helvetica-Bold", qty_size), L["y_id"],
@@ -411,10 +461,23 @@ def draw_label(label, width, height, record: LabelRecord, opts: LabelOptions = L
                                   strokeColor=Color(0.35, 0.35, 0.35), strokeWidth=0.5))
         swatch_w = side + pad * 0.5
 
+    name_row = opts.show("name") or opts.show("count")
     for i, (y, text) in enumerate(zip(L["lines"], texts)):
         x = text_x + (swatch_w if i < len(color_lines) else 0)
-        fitted, size = _fit_string(text, "Helvetica", small, small * 0.7, right - x)
-        label.add(String(x, y, fitted, fontName="Helvetica", fontSize=size))
+        # The field's space: its own line, from cap height down to where the
+        # next line's capitals start; the last line gets everything down to
+        # the name row (or the bottom padding).
+        top = y + small * CAP_HEIGHT
+        bottom = y - small * (1.2 - CAP_HEIGHT)
+        if i == len(texts) - 1:
+            bottom = min(bottom, L["y_name"] + L["name_size"] * 0.75 + small * 0.15
+                         if name_row else pad)
+        lines, size, leading = _fit_text(text, "Helvetica", small, small * 0.7, right - x,
+                                         top - bottom)
+        base = y if len(lines) == 1 else top - size * CAP_HEIGHT
+        for line in lines:
+            label.add(String(x, base, line, fontName="Helvetica", fontSize=size))
+            base -= leading
 
     counter_w = 0.0
     if opts.show("count") and record.part_total:
@@ -427,11 +490,16 @@ def draw_label(label, width, height, record: LabelRecord, opts: LabelOptions = L
         # Centered on the label; kept clear of the counter on both sides so
         # it stays visually centered.
         name_max = width - 2 * pad - 2 * (counter_w + pad)
-        name_text, name_size = _fit_string(record.person, "Helvetica-Bold", L["name_size"],
-                                            L["name_size"] * 0.55, name_max)
-        name_x = (width - stringWidth(name_text, "Helvetica-Bold", name_size)) / 2
-        label.add(String(name_x, L["y_name"], name_text, fontName="Helvetica-Bold",
-                          fontSize=name_size))
+        # Too long for one line: wraps within the name row, from its usual cap
+        # height down to half the bottom padding.
+        top = L["y_name"] + L["name_size"] * CAP_HEIGHT
+        lines, size, leading = _fit_text(record.person, "Helvetica-Bold", L["name_size"],
+                                         L["name_size"] * 0.55, name_max, top - pad * 0.5)
+        base = L["y_name"] if len(lines) == 1 else top - size * CAP_HEIGHT
+        for line in lines:
+            name_x = (width - stringWidth(line, "Helvetica-Bold", size)) / 2
+            label.add(String(name_x, base, line, fontName="Helvetica-Bold", fontSize=size))
+            base -= leading
 
 
 def _specification(spec_name: str) -> "labels.Specification":

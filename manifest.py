@@ -138,9 +138,12 @@ def write_lot_counts_pdf(records: list[LabelRecord], path: str, sort_by: str = "
         Spacer(1, 6 * mm),
     ]
 
+    cell = styles["BodyText"].clone("cell", fontSize=9, leading=11)
     data = [["Person", "Lots", "Total pieces"]]
     for person in people:
-        data.append([person, str(lots[person]), f"{pieces[person]:g}"])
+        # A Paragraph, so a long name wraps within its column.
+        data.append([Paragraph(_xml_escape(person), cell), str(lots[person]),
+                     f"{pieces[person]:g}"])
 
     table = Table(data, colWidths=[100 * mm, 30 * mm, 40 * mm], repeatRows=1)
     table.setStyle(_TABLE_STYLE)
