@@ -20,6 +20,12 @@ and run it from a terminal there (`lugbulk-label --help`); it reads
 `config_local.py`, `service_account.json` and writes its outputs in that
 folder. `--source-file` runs need no setup at all.
 
+Each release lists SHA-256 checksums in `SHA256SUMS`; check a download
+with `sha256sum -c SHA256SUMS --ignore-missing`. `config_local.py` is
+Python and runs when the program starts, so only use one you wrote or
+trust; the program loads exactly that file and never imports other `.py`
+files from the folder it's run in.
+
 To run from source instead, follow Setup below.
 
 ## Releases

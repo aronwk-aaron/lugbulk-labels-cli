@@ -35,6 +35,7 @@ from config import LABEL_SPECS, ACTIVE_LABEL_SPEC, IMAGE_CACHE_DIR
 from records import LabelRecord, is_valid_element_id
 
 IMAGE_FETCH_WORKERS = 8
+MAX_IMAGE_BYTES = 2 * 1024 * 1024
 # A cached miss (404, timeout, etc.) is retried after this long, so a transient
 # CDN outage doesn't permanently blank out a thumbnail.
 MISS_RETRY_SECONDS = 24 * 60 * 60
@@ -67,7 +68,9 @@ def _cached_image_path(element_id: str, url: str) -> str | None:
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = resp.read()
+            data = resp.read(MAX_IMAGE_BYTES + 1)
+        if len(data) > MAX_IMAGE_BYTES:
+            raise ValueError("image too large")  # a part photo is ~5 KB
         Image.open(io.BytesIO(data)).verify()  # don't cache an error page
         tmp = f"{path}.{os.getpid()}.tmp"
         with open(tmp, "wb") as f:
