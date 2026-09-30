@@ -12,7 +12,7 @@ __pycache__/
 *.xlsx
 *parts.csv
 .pytest_cache/
-bricklink_cache.json
+bricklink/
 !tests/fixtures/*.xlsx
 build/
 dist/

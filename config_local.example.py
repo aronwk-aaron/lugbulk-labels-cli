@@ -24,12 +24,9 @@ WEIGHT_OVERRIDES = {
     # "6584302": 0.6,  # frog
 }
 
-# Optional BrickLink API credentials, for part weights (label order) and
-# colors the sheet is missing — see README.md "BrickLink weights". Or set
-# BRICKLINK_CONSUMER_KEY etc. as environment variables instead.
-# BRICKLINK = {
-#     "consumer_key": "", "consumer_secret": "", "token": "", "token_secret": "",
-# }
+# Optional: where BrickLink's catalog download files live (default
+# "bricklink" next to the program) — see README.md "BrickLink weights".
+# BRICKLINK_DIR = "bricklink"
 
 # Output PDF filename for this event. Optional — falls back to a generic
 # name in config.py if omitted.

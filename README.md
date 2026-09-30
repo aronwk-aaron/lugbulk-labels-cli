@@ -197,7 +197,8 @@ the other is looked up in `colors.py`. A color it doesn't know shows as an
 | `--parts` | Write `parts.csv` and `parts.pdf`: one row per part, in label order, with total pieces, how many people ordered it, and its weight. No images needed; combine with `--lot-counts` for both. |
 | `--part-order {heaviest,lightest,sheet}` | Order of parts on the labels and parts list (default: `heaviest`). |
 | `--per-person` | Also write one label PDF per person into `labels_by_person/`, alongside the combined `labels.pdf`. |
-| `--no-bricklink` | Skip BrickLink lookups even if credentials are configured. |
+| `--bricklink-dir DIR` | Folder with BrickLink's catalog files (default `bricklink/`). |
+| `--no-bricklink` | Ignore BrickLink's catalog files even if present. |
 | `--label-spec STOCK` | Label stock by part number, e.g. `avery5162`, `8162`, `dymo30857` (default: `avery5162`) — see [Label sizes](#label-sizes). |
 | `--list-labels` | List every supported Avery and Dymo stock. |
 | `--sort-by {last,first}` | Sort people by first or last name in `--validate`/`--manifest`/`--lot-counts` output (default: `last`). |
@@ -252,38 +253,23 @@ This only affects the rendered label — it never writes back to the sheet.
 
 ## BrickLink weights
 
-With BrickLink API credentials configured, every part is looked up on
-BrickLink: its catalog weight orders the labels, and its BrickLink color
-fills in any color the sheet left blank (or wrote as `unknown`). Lookups
-are cached in `bricklink_cache.json` (a part costs two API calls, once;
-parts BrickLink doesn't know are retried after a week), so later runs are
-instant and offline-safe. Without credentials — or with `--no-bricklink` —
-weights fall back to estimates.
+Parts are ordered by their real BrickLink catalog weight, and any color the
+sheet leaves blank (or writes as `unknown`) is filled from BrickLink, when
+BrickLink's catalog files are in a `bricklink/` folder next to the program
+(or `--bricklink-dir`, or `BRICKLINK_DIR` in `config_local.py`). Without
+them — or with `--no-bricklink` — weights are estimated.
 
-To get credentials:
+BrickLink's API is for sellers only, but any free account can download the
+catalog at [bricklink.com/catalogDownload.asp](https://www.bricklink.com/catalogDownload.asp),
+as **Tab-Delimited File**:
 
-1. Log in to BrickLink and open
-   [API registration](https://www.bricklink.com/v2/api/register_consumer.page)
-   (BrickLink may require your account to have a store — a closed one is
-   fine).
-2. Register a consumer to get a **consumer key** and **consumer secret**.
-3. Create an **access token** for the IP address you'll run from (your
-   public IP — BrickLink rejects calls from any other with
-   `TOKEN_IP_MISMATCHED`); note its **token** and **token secret**.
-4. Put all four in `config_local.py`:
+1. **Catalog Items → Parts**, with **Include Weight** ticked.
+2. **Part and Color Codes** (LEGO element ID → BrickLink part and color).
 
-   ```python
-   BRICKLINK = {
-       "consumer_key": "...", "consumer_secret": "...",
-       "token": "...", "token_secret": "...",
-   }
-   ```
-
-   or export `BRICKLINK_CONSUMER_KEY`, `BRICKLINK_CONSUMER_SECRET`,
-   `BRICKLINK_TOKEN`, `BRICKLINK_TOKEN_SECRET`.
-
-If BrickLink rejects the credentials, the run prints why and carries on
-with cached/estimated weights.
+Put both files in the folder; any names work, they're recognised by their
+header row. Download them again now and then to pick up new parts. The
+files are BrickLink's data, so they stay on your machine (`bricklink/` is
+gitignored).
 
 ## Label sizes
 
@@ -330,7 +316,7 @@ cp label_specs.json ../lugbulk-labels-web/data/   # keep the web app in step
 | `colors.py` | LEGO <-> BrickLink color name table |
 | `samples.py` | Built-in sample orders for `--sample` (and the web preview) |
 | `ordering.py` | Part weight estimates, label order, "N of M" numbering, per-part summaries |
-| `bricklink.py` | BrickLink API client (OAuth 1.0) and lookup cache — weights and colors |
+| `bricklink.py` | Reads BrickLink's catalog download files — weights and colors |
 | `render_labels.py` | Draws each label (thumbnail, text, layout), lays out the PDF, prefetches and outlines images |
 | `manifest.py` | Builds the summary/manifest report, lot-count and parts-list CSV/PDF |
 | `config.py` | Shared/non-sensitive config (header names, label stock lookup, output paths) |
