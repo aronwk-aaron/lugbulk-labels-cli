@@ -1,0 +1,183 @@
+name: Test, build and release
+
+# One pipeline for every change:
+#   - pull request:        tests + build/smoke-test the standalone binaries
+#   - push to master:      canary — the rolling "canary" GitHub pre-release
+#                          is moved to the new head of master, with fresh
+#                          binaries attached
+#   - push of a `v*` tag:  release — GitHub release with generated notes and
+#                          binaries (pre-release if the tag has a suffix,
+#                          e.g. v1.2.0-rc.1)
+# Binaries are PyInstaller single files for Linux, Windows and macOS — no
+# Python install needed to run them.
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+    branches: [master]
+
+# Canary builds queue rather than race, so the canary release always ends
+# up on the newest commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pyflakes *.py tools/*.py tests/*.py
+      - run: python -m pytest -q tests
+
+  binaries:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: lugbulk-label-linux-x86_64
+          - os: windows-latest
+            asset: lugbulk-label-windows-x86_64.exe
+          - os: macos-latest
+            asset: lugbulk-label-macos-arm64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Work out the version
+        id: version
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) version="${GITHUB_REF_NAME#v}" ;;
+            refs/heads/master) version="canary-${GITHUB_SHA::7}" ;;
+            *) version="pr-${GITHUB_SHA::7}" ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          printf '"""Set by CI."""\n\n__version__ = "%s"\n' "$version" > version.py
+
+      - name: Build
+        run: |
+          pip install -r requirements.txt pyinstaller
+          sep=":"; [ "$RUNNER_OS" = Windows ] && sep=";"
+          pyinstaller --onefile --name lugbulk-label \
+            --add-data "label_specs.json${sep}." \
+            --collect-data reportlab --collect-data googleapiclient \
+            main.py
+          exe=dist/lugbulk-label; [ "$RUNNER_OS" = Windows ] && exe=dist/lugbulk-label.exe
+          mkdir -p out && cp "$exe" "out/${{ matrix.asset }}"
+
+      # Run the packaged binary end to end against a sample order sheet,
+      # from an empty directory with no config_local.py.
+      - name: Smoke test
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bin="$PWD/out/${{ matrix.asset }}"
+          fixture="$PWD/tests/fixtures/sample_order.xlsx"
+          mkdir smoke && cd smoke
+          check() {  # check "<expected substring>" command...
+            local want="$1"; shift
+            local out; out="$("$@")"
+            echo "$out"
+            [[ "$out" == *"$want"* ]] || { echo "expected '$want' in output of: $*" >&2; exit 1; }
+          }
+          check "$EXPECTED_VERSION" "$bin" --version
+          check avery5162 "$bin" --list-labels
+          check "6 labels, 2 people" "$bin" --source-file "$fixture" --validate
+          "$bin" --source-file "$fixture" --parts --lot-counts
+          "$bin" --source-file "$fixture" --label-spec 8162 --output labels.pdf
+          ls -l parts.csv parts.pdf lot_counts.csv lot_counts.pdf labels.pdf
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: out/${{ matrix.asset }}
+          if-no-files-found: error
+
+  github-release:
+    needs: binaries
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.binaries.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Release notes header
+        run: |
+          cat > header.md <<EOF
+          ## Downloads
+
+          Standalone programs — no Python install needed. Download the one for
+          your system, put it in a folder, and run it from a terminal:
+
+          | System | File |
+          |---|---|
+          | Windows | \`lugbulk-label-windows-x86_64.exe\` |
+          | macOS (Apple Silicon) | \`lugbulk-label-macos-arm64\` |
+          | Linux | \`lugbulk-label-linux-x86_64\` |
+
+          On macOS/Linux, make it executable first (\`chmod +x lugbulk-label-*\`);
+          macOS may also need it allowed under System Settings → Privacy & Security.
+          For the Google Sheets path, put \`config_local.py\` (copy the attached
+          \`config_local.example.py\`) and \`service_account.json\` in the folder you
+          run it from — see the README. \`--source-file\` runs need neither.
+          \`--version\` prints \`$VERSION\`.
+          EOF
+          cp config_local.example.py assets/
+
+      - name: Release (v* tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          prerelease=""
+          [[ "$GITHUB_REF_NAME" == *-* ]] && prerelease="--prerelease"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes $prerelease \
+            --title "$GITHUB_REF_NAME" --notes-file header.md assets/*
+
+      - name: Canary (head of master)
+        if: github.ref == 'refs/heads/master'
+        run: |
+          last_release="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          {
+            echo "Rolling pre-release: always the head of \`master\` ($GITHUB_SHA)."
+            echo "Not a stable release — use the latest \`v*\` release for that."
+            echo
+            cat header.md
+            echo
+            echo "## Changes since ${last_release:-the first commit}"
+            echo
+            git log --pretty='- %s (%h)' ${last_release:+$last_release..}HEAD | head -50
+          } > notes.md
+          gh release delete canary --yes --cleanup-tag 2>/dev/null || true
+          gh release create canary --target "$GITHUB_SHA" --prerelease \
+            --title "Canary ($VERSION)" --notes-file notes.md assets/*
