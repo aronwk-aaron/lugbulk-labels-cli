@@ -1,77 +1,34 @@
-import io
-import json
-import urllib.request
-
-
 import bricklink
-from bricklink import Credentials, oauth_header
 
 
-def test_oauth_signature_matches_published_example():
-    """Twitter's published OAuth 1.0a signing walkthrough."""
-    creds = Credentials("xvz1evFS4wEEPTGEFPHBog", "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw",
-                        "370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb",
-                        "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE")
-    header = oauth_header(
-        "POST", "https://api.twitter.com/1.1/statuses/update.json", creds,
-        params={"include_entities": "true",
-                "status": "Hello Ladies + Gentlemen, a signed OAuth request!"},
-        nonce="kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg", timestamp="1318622958")
-    assert 'oauth_signature="hCtSmYh%2BiHYCEqBWrE7C7hYmtUk%3D"' in header
+def write(path, text):
+    path.write_bytes(text.replace("\n", "\r\n").encode())  # BrickLink files are CRLF
 
 
-CREDS = Credentials("ck", "cs", "t", "ts")
+PARTS = """Category ID\tCategory Name\tNumber\tName\tAlternate Item Number\tWeight (in Grams)
 
 
-def fake_api(monkeypatch, responses):
-    """Serve canned BrickLink JSON by URL path; records the paths asked for."""
-    calls = []
-
-    def urlopen(req, timeout):
-        path = req.full_url.removeprefix(bricklink.API_BASE)
-        assert req.headers["Authorization"].startswith("OAuth ")
-        calls.append(path)
-        return io.BytesIO(json.dumps(responses[path]).encode())
-
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    return calls
+5\tBrick\t3004\tBrick 1 x 2\t3004f1,93792\t0.83
+26\tPlate\t3811\tBaseplate 32 x 32\t\t107
+28\tAnimal\tx223\tFrog\t\t?
+"""
+CODES = """Item No\tColor\tCode
+3004\tLight Bluish Gray\t4211388
+3811\tBright Green\t6097276
+x223\tBlack\t6584302
+"""
 
 
-OK = {"code": 200, "message": "OK"}
+def test_load_catalog_by_header_not_name(tmp_path):
+    write(tmp_path / "downloaded-1.txt", PARTS)
+    write(tmp_path / "whatever.txt", CODES)
+    catalog = bricklink.load(str(tmp_path))
+    assert catalog["4211388"] == bricklink.PartInfo("3004", "Light Bluish Gray", 0.83)
+    assert catalog["6097276"].weight == 107
+    assert catalog["6584302"] == bricklink.PartInfo("x223", "Black", None)  # "?" weight
 
 
-def test_lookup_fetches_then_caches(monkeypatch, tmp_path):
-    calls = fake_api(monkeypatch, {
-        "/item_mapping/4211388": {"meta": OK, "data": [
-            {"item": {"no": "3004", "type": "PART"}, "color_name": "Light Bluish Gray"}]},
-        "/items/PART/3004": {"meta": OK, "data": {"no": "3004", "weight": "0.82"}},
-        "/item_mapping/9999999": {"meta": {"code": 404, "message": "RESOURCE_NOT_FOUND"}},
-    })
-    cache = str(tmp_path / "cache.json")
-    found, error = bricklink.lookup(["4211388", "9999999"], CREDS, cache)
-    assert error is None
-    assert found["4211388"] == bricklink.PartInfo("3004", "Light Bluish Gray", 0.82)
-    assert found["9999999"].weight is None
-    assert len(calls) == 3
-
-    calls.clear()
-    found, _ = bricklink.lookup(["4211388", "9999999"], CREDS, cache)
-    assert calls == []  # both served from cache (the miss is retried only after a week)
-    assert found["4211388"].weight == 0.82
-
-
-def test_zero_weight_means_unknown(monkeypatch, tmp_path):
-    fake_api(monkeypatch, {
-        "/item_mapping/6584302": {"meta": OK, "data": [
-            {"item": {"no": "1234", "type": "PART"}, "color_name": "Black"}]},
-        "/items/PART/1234": {"meta": OK, "data": {"weight": "0.00"}},
-    })
-    found, _ = bricklink.lookup(["6584302"], CREDS, str(tmp_path / "c.json"))
-    assert found["6584302"].weight is None and found["6584302"].color == "Black"
-
-
-def test_auth_failure_is_reported_not_cached(monkeypatch, tmp_path):
-    fake_api(monkeypatch, {"/item_mapping/4211388": {"meta": {
-        "code": 401, "message": "BAD_OAUTH_REQUEST", "description": "TOKEN_IP_MISMATCHED"}}})
-    found, error = bricklink.lookup(["4211388"], CREDS, str(tmp_path / "c.json"))
-    assert found == {} and "TOKEN_IP_MISMATCHED" in error
+def test_missing_files_mean_no_catalog(tmp_path):
+    assert bricklink.load(str(tmp_path / "nope")) == {}
+    write(tmp_path / "Parts.txt", PARTS)  # codes file missing
+    assert bricklink.load(str(tmp_path)) == {}

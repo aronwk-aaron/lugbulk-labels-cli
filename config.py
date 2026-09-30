@@ -46,16 +46,9 @@ LEGO_COLOR_OVERRIDES: dict[str, str] = getattr(config_local, "LEGO_COLOR_OVERRID
 # Grams per piece, keyed by Element ID — for sorting parts by weight where
 # the description has no dimensions to estimate from (see ordering.py).
 WEIGHT_OVERRIDES: dict[str, float] = getattr(config_local, "WEIGHT_OVERRIDES", {})
-# BrickLink API credentials, for part weights (see bricklink.py): a dict
-# with consumer_key, consumer_secret, token, token_secret — in
-# config_local.py as BRICKLINK = {...}, or as BRICKLINK_CONSUMER_KEY /
-# _CONSUMER_SECRET / _TOKEN / _TOKEN_SECRET environment variables.
-_bl = getattr(config_local, "BRICKLINK", None) or {
-    k: os.environ.get(f"BRICKLINK_{k.upper()}", "")
-    for k in ("consumer_key", "consumer_secret", "token", "token_secret")
-}
-BRICKLINK_CREDENTIALS = _bl if all(_bl.get(k) for k in (
-    "consumer_key", "consumer_secret", "token", "token_secret")) else None
+# Folder holding BrickLink's catalog download files (Parts with weights,
+# and Part and Color Codes) — see bricklink.py.
+BRICKLINK_DIR = getattr(config_local, "BRICKLINK_DIR", "bricklink")
 
 # --- Google Sheets (READ-ONLY: never write/update/append to this sheet) ---
 SOURCE_TAB = "Order Here"

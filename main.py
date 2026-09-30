@@ -7,7 +7,7 @@ from collections import Counter
 from config import (
     SHEET_ID, OUTPUT_PDF, MANIFEST_PATH, LOT_COUNTS_PATH, LOT_COUNTS_PDF_PATH, PER_PERSON_DIR,
     PARTS_PATH, PARTS_PDF_PATH, CHECKLIST_PDF_PATH, TEST_PAGE_PATH, LABEL_SPECS, ACTIVE_LABEL_SPEC, WEIGHT_OVERRIDES, find_label_spec,
-    BRICKLINK_CREDENTIALS,
+    BRICKLINK_DIR,
 )
 import bricklink
 from version import __version__
@@ -57,9 +57,13 @@ def parse_args():
              "first). Within a part, labels always go smallest qty first.",
     )
     parser.add_argument(
+        "--bricklink-dir", metavar="DIR", default=BRICKLINK_DIR,
+        help=f"Folder with BrickLink's catalog download files (default: {BRICKLINK_DIR}/).",
+    )
+    parser.add_argument(
         "--no-bricklink", action="store_true",
-        help="Don't look parts up on BrickLink (weights for part order, and colors "
-             "the sheet is missing), even if BRICKLINK credentials are configured.",
+        help="Don't use BrickLink's catalog files (part weights for ordering, and colors "
+             "the sheet is missing), even if they're present.",
     )
     parser.add_argument(
         "--label-spec", default=ACTIVE_LABEL_SPEC, metavar="STOCK",
@@ -144,24 +148,26 @@ def list_labels() -> None:
         print(f"  {sid:14} {h:.2f}\" x {w:.2f}\"  {per:9} {s['description']}{also}")
 
 
-def apply_bricklink(records, issues) -> dict[str, float]:
-    """Look every part up on BrickLink (cached): returns element ID -> catalog
-    weight, and fills in BrickLink/LEGO color names the sheet left blank."""
-    creds = bricklink.Credentials(**BRICKLINK_CREDENTIALS)
-    found, error = bricklink.lookup({r.element_id for r in records}, creds)
-    if error:
-        print(f"BrickLink: {error} — using cached/estimated weights for the rest.")
-
+def apply_bricklink(records, issues, folder: str) -> dict[str, float]:
+    """Look every part up in BrickLink's catalog files: returns element ID ->
+    catalog weight, and fills in BrickLink/LEGO color names the sheet left
+    blank."""
+    catalog = bricklink.load(folder)
+    if not catalog:
+        print(f"Note: no BrickLink catalog files in '{folder}/' — using estimated weights "
+              "(see README, 'BrickLink weights').")
+        return {}
     filled = set()
     for r in records:
-        info = found.get(r.element_id)
+        info = catalog.get(r.element_id)
         if info and info.color and not r.bl_color:
             r.bl_color = info.color
             r.lego_color = r.lego_color or colors.resolve("", info.color)[0]
             filled.add(r.element_id)
     # A color BrickLink supplied is no longer missing.
     issues[:] = [i for i in issues if not (i.kind == "missing_color" and i.element_id in filled)]
-    return {e: info.weight for e, info in found.items() if info.weight is not None}
+    return {r.element_id: catalog[r.element_id].weight for r in records
+            if r.element_id in catalog and catalog[r.element_id].weight is not None}
 
 
 def main():
@@ -201,8 +207,8 @@ def main():
             sys.exit("No label records found — check SOURCE_TAB and sheet sharing permissions.")
 
     bl_weights = {}
-    if BRICKLINK_CREDENTIALS and not args.no_bricklink and not args.sample:
-        bl_weights = apply_bricklink(records, issues)
+    if not args.no_bricklink and not args.sample:
+        bl_weights = apply_bricklink(records, issues, args.bricklink_dir)
 
     records = order_records(records, WEIGHT_OVERRIDES, args.part_order,
                             person_key=lambda p: person_sort_key(p, args.sort_by),
