@@ -82,6 +82,7 @@ jobs:
           pyinstaller --onefile --name lugbulk-label \
             --add-data "label_specs.json${sep}." \
             --collect-data reportlab --collect-data googleapiclient \
+            --collect-submodules reportlab.graphics.barcode \
             main.py
           exe=dist/lugbulk-label; [ "$RUNNER_OS" = Windows ] && exe=dist/lugbulk-label.exe
           mkdir -p out && cp "$exe" "out/${{ matrix.asset }}"
@@ -106,7 +107,10 @@ jobs:
           check "6 labels, 2 people" "$bin" --source-file "$fixture" --validate
           "$bin" --source-file "$fixture" --parts --lot-counts
           "$bin" --source-file "$fixture" --label-spec 8162 --output labels.pdf
-          ls -l parts.csv parts.pdf lot_counts.csv lot_counts.pdf labels.pdf
+          "$bin" --sample --show qr --hide photo --checklist --output sample.pdf
+          "$bin" --test-page --label-spec dymo30857
+          ls -l parts.csv parts.pdf lot_counts.csv lot_counts.pdf labels.pdf \
+            sample.pdf checklist.pdf alignment_test.pdf
 
       - uses: actions/upload-artifact@v4
         with:
