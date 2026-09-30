@@ -10,3 +10,10 @@ __pycache__/
 *.pyc
 .venv/
 *.xlsx
+*parts.csv
+.pytest_cache/
+bricklink_cache.json
+!tests/fixtures/*.xlsx
+build/
+dist/
+*.spec

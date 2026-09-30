@@ -1,31 +1,68 @@
 """Configuration for the Sheets -> label PDF pipeline.
 
-Event-specific values (SHEET_ID, COLOR_OVERRIDES) live in config_local.py,
-which is gitignored — copy config_local.example.py to get started.
+Event-specific values (SHEET_ID, overrides, output name) live in
+config_local.py, which is gitignored — copy config_local.example.py to get
+started. It's only required for the Google Sheets path; --source-file runs
+work without it.
 """
+
+import os
+import sys
+
+if getattr(sys, "frozen", False):
+    # A packaged release binary: look for config_local.py in the current
+    # directory and next to the executable, like the rest of the files it
+    # uses (service_account.json, image_cache/, outputs).
+    sys.path[:0] = [os.getcwd(), os.path.dirname(sys.executable)]
 
 try:
     import config_local
-    from config_local import SHEET_ID, COLOR_OVERRIDES
 except ImportError:
-    raise SystemExit(
-        "config_local.py not found. Run: cp config_local.example.py config_local.py "
-        "and fill in SHEET_ID (see README.md)."
-    )
+    config_local = None
+
+SHEET_ID = getattr(config_local, "SHEET_ID", "")
+# Per-element fixes applied on top of the sheet's own color columns, keyed
+# by Element ID: BrickLink name and LEGO name respectively.
+COLOR_OVERRIDES: dict[str, str] = getattr(config_local, "COLOR_OVERRIDES", {})
+LEGO_COLOR_OVERRIDES: dict[str, str] = getattr(config_local, "LEGO_COLOR_OVERRIDES", {})
+# Grams per piece, keyed by Element ID — for sorting parts by weight where
+# the description has no dimensions to estimate from (see ordering.py).
+WEIGHT_OVERRIDES: dict[str, float] = getattr(config_local, "WEIGHT_OVERRIDES", {})
+# BrickLink API credentials, for part weights (see bricklink.py): a dict
+# with consumer_key, consumer_secret, token, token_secret — in
+# config_local.py as BRICKLINK = {...}, or as BRICKLINK_CONSUMER_KEY /
+# _CONSUMER_SECRET / _TOKEN / _TOKEN_SECRET environment variables.
+_bl = getattr(config_local, "BRICKLINK", None) or {
+    k: os.environ.get(f"BRICKLINK_{k.upper()}", "")
+    for k in ("consumer_key", "consumer_secret", "token", "token_secret")
+}
+BRICKLINK_CREDENTIALS = _bl if all(_bl.get(k) for k in (
+    "consumer_key", "consumer_secret", "token", "token_secret")) else None
 
 # --- Google Sheets (READ-ONLY: never write/update/append to this sheet) ---
 SOURCE_TAB = "Order Here"
 SERVICE_ACCOUNT_FILE = "service_account.json"  # path to the downloaded key, keep out of git
 
-# --- "Order Here" tab layout (0-indexed columns) ---
+# --- "Order Here" tab layout ---
+# Front-matter columns are found by header text (see *_HEADERS below);
+# these 0-indexed positions are only the fallback when a header is absent.
 COL_ELEMENT_ID = 1
 COL_DESCRIPTION = 3
-COL_COLOR = 4
-FIRST_PERSON_COL = 7    # 'qty' column for the first person
-LAST_PERSON_COL = 89    # 'qty' column for the last person (inclusive)
-PERSON_COL_STRIDE = 2   # each person occupies (qty, $cost) = 2 columns
+COL_COLOR = 4  # "BL Color"
 HEADER_ROW = 0          # person names live here
+SUBHEADER_ROW = 1       # "qty" / "$$" markers live here — see QTY_MARKER
 DATA_START_ROW = 2      # first row of actual part data
+# A person's qty column is the one whose SUBHEADER_ROW cell reads "qty".
+# Where the first person column sits has shifted between sheet years, so
+# person columns are found by this marker rather than by position.
+QTY_MARKER = "qty"
+
+# Header text candidates, in priority order, for each front-matter column.
+ELEMENT_ID_HEADERS = ("Element ID", "Part Number")
+DESCRIPTION_HEADERS = ("Description",)
+LEGO_COLOR_HEADERS = ("LEGO Color", "LEGO Colour")
+BL_COLOR_HEADERS = ("BL Color", "BrickLink Color", "BL Colour", "Color")
+WEIGHT_HEADERS = ("Weight", "Weight (g)", "Weight g")
 
 # LEGO element photo CDN — built from Element ID, since the sheet's own
 # Photo column is an in-cell =IMAGE() formula the Sheets API can't return.
@@ -33,30 +70,36 @@ IMAGE_URL_TEMPLATE = (
     "https://www.lego.com/cdn/product-assets/element.img.lod5photo.192x192/{element_id}.jpg"
 )
 
-# --- Label sheet layouts, keyed by name; pick one with --label-spec ---
-LABEL_SPECS = {
-    # 1" x 2-5/8", 3 across x 10 down, 30/sheet
-    "avery5160": dict(
-        sheet_width=215.9, sheet_height=279.4,  # US Letter, mm
-        columns=3, rows=10,
-        label_width=66.675, label_height=25.4,  # mm
-        corner_radius=2,
-        left_margin=4.7625, right_margin=4.7625,
-        top_margin=12.7, bottom_margin=12.7,
-        row_gap=0, column_gap=3.175,
-    ),
-    # 2" x 4", 2 across x 5 down, 10/sheet — more room per label, fewer sheets
-    "avery5163": dict(
-        sheet_width=215.9, sheet_height=279.4,  # US Letter, mm
-        columns=2, rows=5,
-        label_width=101.6, label_height=50.8,  # mm
-        corner_radius=2,
-        left_margin=3.9, right_margin=3.9,
-        top_margin=12.7, bottom_margin=12.7,
-        row_gap=0, column_gap=4.9,
-    ),
-}
-ACTIVE_LABEL_SPEC = "avery5160"
+# --- Label stock; pick one with --label-spec (see --list-labels) ---
+# label_specs.json is the Avery (US-Letter and A4) and Dymo LabelWriter
+# inventory, generated by tools/update_label_specs.py. All sizes in mm; a
+# roll label (Dymo) is one label per page, page = label.
+def _load_label_specs() -> tuple[dict[str, dict], dict[str, str]]:
+    import json
+    import re
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "label_specs.json")
+    with open(path) as f:
+        specs = {s["id"]: s for s in json.load(f)["specs"]}
+    aliases = {}  # any accepted spelling -> spec id
+    for sid, s in specs.items():
+        for part in [s["part"], *s["equivalents"]]:
+            key = re.sub(r"[^a-z0-9]", "", f"{s['brand']}{part}".lower())
+            aliases.setdefault(key, sid)
+            aliases.setdefault(re.sub(r"[^a-z0-9]", "", part.lower()), sid)  # bare part number
+    return specs, aliases
+
+
+LABEL_SPECS, LABEL_SPEC_ALIASES = _load_label_specs()
+
+
+def find_label_spec(name: str) -> str | None:
+    """Spec id for "avery5162", "Avery 8162", "5162", "dymo30857", ... or None."""
+    import re
+    key = re.sub(r"[^a-z0-9]", "", name.lower())
+    return key if key in LABEL_SPECS else LABEL_SPEC_ALIASES.get(key)
+
+
+ACTIVE_LABEL_SPEC = "avery5162"
 
 # --- Output ---
 # Event-specific PDF name, if set in config_local.py; otherwise a generic default.
@@ -65,4 +108,6 @@ IMAGE_CACHE_DIR = "image_cache"
 MANIFEST_PATH = "manifest.csv"
 LOT_COUNTS_PATH = "lot_counts.csv"
 LOT_COUNTS_PDF_PATH = "lot_counts.pdf"
+PARTS_PATH = "parts.csv"
+PARTS_PDF_PATH = "parts.pdf"
 PER_PERSON_DIR = "labels_by_person"
