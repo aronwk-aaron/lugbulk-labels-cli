@@ -395,9 +395,11 @@ def _qr(label, x: float, y: float, size: float, data: str) -> None:
     label.add(group)
 
 
-def draw_label(label, width, height, record: LabelRecord, opts: LabelOptions = LabelOptions()):
+def draw_label(label, width, height, record: LabelRecord | None, opts: LabelOptions = LabelOptions()):
     # NOTE: width/height (from pylabels) are in points, like every
     # coordinate here — never mix in raw mm values.
+    if record is None:  # an empty slot (--keep-parts optimize)
+        return
     color_lines = []
     if opts.show("lego_color") and record.lego_color:
         color_lines.append(f"LEGO: {record.lego_color}")
@@ -517,18 +519,20 @@ def _specification(spec_name: str) -> "labels.Specification":
     )
 
 
-def _save_sheet(records: list[LabelRecord], output_path: str, spec_name: str,
+def _save_sheet(records: list[LabelRecord | None], output_path: str, spec_name: str,
                 opts: LabelOptions) -> int:
+    """Labels in slot order; None leaves a slot empty. Returns the labels drawn."""
     sheet = labels.Sheet(_specification(spec_name), partial(draw_label, opts=opts), border=False)
     for record in records:
         sheet.add_label(record)
     sheet.save(output_path)
-    return sheet.label_count
+    return sum(1 for r in records if r is not None)
 
 
-def build_pdf(records: list[LabelRecord], output_path: str, spec_name: str = ACTIVE_LABEL_SPEC,
+def build_pdf(records: list[LabelRecord | None], output_path: str, spec_name: str = ACTIVE_LABEL_SPEC,
               opts: LabelOptions = LabelOptions()):
-    _prefetch_images(records, opts)
+    """`records` in slot order; None is an empty slot (see packing.py)."""
+    _prefetch_images([r for r in records if r is not None], opts)
     return _save_sheet(records, output_path, spec_name, opts)
 
 

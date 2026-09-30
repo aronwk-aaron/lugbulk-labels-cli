@@ -16,6 +16,7 @@ from render_labels import (
     LABEL_PARTS, LabelOptions, build_pdf, build_per_person_pdfs, build_test_page,
 )
 from ordering import PART_ORDERS, order_records, summarize_parts
+from packing import KEEP_MODES, KEEP_OFF, flow_summary, pack_records, slots_of
 from manifest import (
     build_summary, write_manifest_csv, write_lot_counts_csv, write_lot_counts_pdf,
     write_checklist_pdf, write_parts_csv, write_parts_pdf, person_sort_key, SORT_CHOICES,
@@ -55,6 +56,14 @@ def parse_args():
         "--part-order", choices=PART_ORDERS, default="heaviest",
         help="How to order parts on the labels and parts list (default: heaviest "
              "first). Within a part, labels always go smallest qty first.",
+    )
+    parser.add_argument(
+        "--keep-parts", choices=KEEP_MODES, default=KEEP_OFF,
+        help="optimize: arrange labels so no part is split across two sheets, on the "
+             "fewest sheets possible (combinations of parts that fill each sheet; empty "
+             "slots are left blank). A part bigger than a sheet fills whole sheets and "
+             "only its remainder is fitted in with others. off (default): labels run on "
+             "continuously. Only for stocks with more than one label per sheet.",
     )
     parser.add_argument(
         "--bricklink-dir", metavar="DIR", default=BRICKLINK_DIR,
@@ -135,6 +144,23 @@ def parse_args():
     return args
 
 
+def keep_parts_together(records, args) -> list:
+    """The label slots in print order (None = an empty slot). With
+    --keep-parts optimize on a multi-label stock, parts are packed so none is
+    split across sheets (packing.py); otherwise just the records."""
+    spec = LABEL_SPECS.get(args.label_spec, {})
+    per = spec.get("columns", 1) * spec.get("rows", 1)
+    if args.keep_parts == KEEP_OFF or per <= 1 or not records:
+        return list(records)
+    packed = pack_records(records, per)
+    flow = flow_summary(records, per)
+    note = "" if packed.proven else " (best found in the time allowed, not proven fewest)"
+    print(f"Keep parts together: {packed.sheets} sheets, {packed.blanks} blank labels, "
+          f"0 parts split{note} — without it: {flow['sheets']} sheets, "
+          f"{flow['split_parts']} parts split.", file=sys.stderr)
+    return slots_of(records, packed.layout)
+
+
 def list_labels() -> None:
     """Print the label inventory, grouped by brand and page size."""
     group = None
@@ -213,6 +239,9 @@ def main():
     records = order_records(records, WEIGHT_OVERRIDES, args.part_order,
                             person_key=lambda p: person_sort_key(p, args.sort_by),
                             bricklink=bl_weights)
+    slots = keep_parts_together(records, args)
+    # Reports follow the labels: with --keep-parts optimize, in packed order.
+    records = [r for r in slots if r is not None]
     parts = summarize_parts(records, WEIGHT_OVERRIDES, args.part_order, bl_weights)
 
     if args.validate:
@@ -241,7 +270,7 @@ def main():
         print(f"Note: {len(issues)} issue(s) found on the sheet — run with --validate for details.")
 
     output_pdf = args.output or OUTPUT_PDF
-    count = build_pdf(records, output_pdf, spec_name=args.label_spec,
+    count = build_pdf(slots, output_pdf, spec_name=args.label_spec,
                       opts=args.label_options)
     print(f"Wrote {count} labels to {output_pdf}")
 
