@@ -22,14 +22,14 @@ def test_qty_marker_layout():
 
 
 def test_name_cost_pair_layout_with_totals_row_above_header():
-    """2026 master sheet / export: totals row, then a header row where each
+    """Master-sheet layout (made-up values): totals row, then a header row where each
     person is (name, running cost total), and LEGO rather than BL colors."""
     rows = [
-        [83961, None, None, None, None, None, None, "Ann Lee", None],
+        [41234, None, None, None, None, None, None, "Ann Lee", None],
         ["Total Ordered", "Part Number", "Description", "LEGO Color", "BL Color", "Price",
-         "Nominated for", "Ann Lee", 232.45, "Bob Roe", "44.25"],
+         "Nominated for", "Ann Lee", 120.50, "Bob Roe", "30.00"],
         [None] * 11,
-        [2650, 4211407.0, "PLATE 4X8", "WHITE", None, 0.13, "MILS", 100.0, 13, "x", None],
+        [1500, 4211407.0, "PLATE 4X8", "WHITE", None, 0.10, "ZZZ", 100.0, 10, "x", None],
     ]
     records, issues = build_records(rows)
     assert [(r.person, r.element_id, r.qty, r.lego_color, r.bl_color) for r in records] == [
