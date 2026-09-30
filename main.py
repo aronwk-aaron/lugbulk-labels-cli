@@ -18,9 +18,11 @@ from render_labels import (
 from ordering import PART_ORDERS, order_records, summarize_parts
 from packing import KEEP_MODES, KEEP_OFF, flow_summary, pack_records, slots_of
 from manifest import (
-    build_summary, write_manifest_csv, write_lot_counts_csv, write_lot_counts_pdf,
-    write_checklist_pdf, write_parts_csv, write_parts_pdf, person_sort_key, SORT_CHOICES,
+    ReportContext, build_summary, write_manifest_csv, write_lot_counts_csv,
+    write_lot_counts_pdf, write_checklist_pdf, write_parts_csv, write_parts_pdf,
+    person_sort_key, SORT_CHOICES,
 )
+import report_options
 
 
 def parse_args():
@@ -110,9 +112,10 @@ def parse_args():
         help="List every supported Avery and Dymo label stock and exit.",
     )
     parser.add_argument(
-        "--sort-by", choices=SORT_CHOICES, default="last",
+        "--sort-by", choices=SORT_CHOICES, default=None,
         help="Sort people by first or last name in reports (default: last).",
     )
+    report_options.add_arguments(parser)
     parser.add_argument(
         "--source-file", metavar="PATH",
         help="Read order data from a local .xlsx file instead of the Google "
@@ -132,6 +135,13 @@ def parse_args():
              f"— --manifest/--lot-counts filenames are unchanged.",
     )
     args = parser.parse_args()
+    # Given explicitly, --sort-by beats the sort in a --report-options file.
+    args.sort_by_given = args.sort_by
+    args.sort_by = args.sort_by or "last"
+    try:
+        args.report_options_parsed = report_options.options_from_args(args)
+    except ValueError as e:
+        parser.error(str(e))
     try:
         args.label_options = LabelOptions.parse(args.hide, args.show)
     except ValueError as e:
@@ -236,28 +246,33 @@ def main():
     if not args.no_bricklink and not args.sample:
         bl_weights = apply_bricklink(records, issues, args.bricklink_dir)
 
+    sheet_records = records  # sheet order, for the reports' "sheet" part order
     records = order_records(records, WEIGHT_OVERRIDES, args.part_order,
                             person_key=lambda p: person_sort_key(p, args.sort_by),
                             bricklink=bl_weights)
     slots = keep_parts_together(records, args)
     # Reports follow the labels: with --keep-parts optimize, in packed order.
     records = [r for r in slots if r is not None]
-    parts = summarize_parts(records, WEIGHT_OVERRIDES, args.part_order, bl_weights)
+    # First appearance among the labels, so it follows --keep-parts optimize too.
+    parts = summarize_parts(records, WEIGHT_OVERRIDES, "sheet", bl_weights)
+    report_opts = args.report_options_parsed
+    context = ReportContext(sheet_records, WEIGHT_OVERRIDES, bl_weights)
 
     if args.validate:
         print(build_summary(records, issues, args.label_spec, parts, sort_by=args.sort_by))
         return
 
     if args.parts:
-        write_parts_csv(parts, PARTS_PATH)
-        write_parts_pdf(parts, PARTS_PDF_PATH)
+        write_parts_csv(parts, PARTS_PATH, report_opts["parts"], context)
+        write_parts_pdf(parts, PARTS_PDF_PATH, report_opts["parts"], context)
         print(f"Wrote {PARTS_PATH} and {PARTS_PDF_PATH}")
         if not args.lot_counts:
             return
 
     if args.lot_counts:
-        write_lot_counts_csv(records, LOT_COUNTS_PATH, sort_by=args.sort_by)
-        write_lot_counts_pdf(records, LOT_COUNTS_PDF_PATH, sort_by=args.sort_by)
+        write_lot_counts_csv(records, LOT_COUNTS_PATH, opts=report_opts["lots"])
+        write_lot_counts_pdf(records, LOT_COUNTS_PDF_PATH, opts=report_opts["lots"],
+                             context=context)
         lots = Counter(r.person for r in records)
         for person, count in sorted(
             lots.items(), key=lambda kv: person_sort_key(kv[0], args.sort_by)
@@ -280,7 +295,8 @@ def main():
         print(f"Wrote {len(counts)} per-person PDFs to {PER_PERSON_DIR}/")
 
     if args.checklist:
-        write_checklist_pdf(records, CHECKLIST_PDF_PATH, sort_by=args.sort_by)
+        write_checklist_pdf(records, CHECKLIST_PDF_PATH, opts=report_opts["checklist"],
+                            context=context)
         print(f"Wrote {CHECKLIST_PDF_PATH}")
 
     if args.manifest:

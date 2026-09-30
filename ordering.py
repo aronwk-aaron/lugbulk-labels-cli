@@ -72,6 +72,7 @@ class PartSummary:
     pieces: float
     weight: float | None  # grams per piece; None if unknown
     weight_source: str  # "override" | "sheet" | "bricklink" | "estimate" | ""
+    image_url: str = ""  # the part's photo, for reports that show it
 
 
 def part_weight(record, overrides: dict[str, float],
@@ -102,7 +103,8 @@ def summarize_parts(records, overrides: dict[str, float] | None = None,
         if part is None:
             weight, source = part_weight(r, overrides, bricklink)
             part = parts[r.element_id] = PartSummary(
-                r.element_id, r.description, r.lego_color, r.bl_color, 0, 0.0, weight, source)
+                r.element_id, r.description, r.lego_color, r.bl_color, 0, 0.0, weight, source,
+                r.image_url)
         part.lots += 1
         part.pieces += _qty(r)
 

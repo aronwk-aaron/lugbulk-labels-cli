@@ -202,10 +202,57 @@ the other is looked up in `colors.py`. A color it doesn't know shows as an
 | `--no-bricklink` | Ignore BrickLink's catalog files even if present. |
 | `--label-spec STOCK` | Label stock by part number, e.g. `avery5162`, `8162`, `dymo30857` (default: `avery5162`) — see [Label sizes](#label-sizes). |
 | `--list-labels` | List every supported Avery and Dymo stock. |
-| `--sort-by {last,first}` | Sort people by first or last name in `--validate`/`--manifest`/`--lot-counts` output (default: `last`). |
+| `--sort-by {last,first}` | Sort people by first or last name in `--validate`/`--manifest`/`--lot-counts`/`--checklist` output (default: `last`). |
+| `--report-title`, `--report-subtitle`, `--paper`, `--orientation`, `--checklist-*`, `--parts-*`, `--lots-*`, `--report-options FILE` | Configure the checklist, parts list and lot counts — see [Report options](#report-options). |
 | `--source-file PATH` | Read order data from a local `.xlsx` file instead of the Google Sheet — see [Using a local .xlsx file instead of the Sheet](#using-a-local-xlsx-file-instead-of-the-sheet). |
 | `--sheet-id ID` | Read a different Google Sheet for this run, overriding `SHEET_ID` — handy when several groups' sheets are shared with the service account. |
 | `--output PATH` | Output PDF filename for this run, overriding `OUTPUT_PDF` (default: the generic `labels.pdf`, or the name set in `config_local.py`). Only affects the combined label PDF — `--manifest`/`--lot-counts` filenames are unchanged. |
+
+## Report options
+
+The packing checklist (`--checklist`), parts list (`--parts`) and lot counts
+(`--lot-counts`) can be configured with the same options as the web app's
+report settings. Without any of these flags the reports come out exactly as
+before. CSV columns stay fixed, as on the web; the parts and lot-counts CSVs
+follow the parts order and minimum-lots options.
+
+| Flag | Reports | Web option | Values |
+|---|---|---|---|
+| `--report-title TEXT` | all three | `title` | up to 80 characters; replaces the heading (on the checklist it is a line at the top of every page) |
+| `--report-subtitle TEXT` | all three | `subtitle` | up to 120 characters |
+| `--paper` | all three | `paper` | `letter` (default), `a4` |
+| `--orientation` | all three | `orientation` | `portrait` (default), `landscape` |
+| `--checklist-layout` | checklist | `layout` | `per-person` (default; the web's `page`): a page per person; `continuous`: people run on |
+| `--checklist-order` | checklist | `order` | `labels` (default, same as the labels), `heaviest`, `lightest`, `sheet` |
+| `--checklist-show` / `--checklist-hide` | checklist | `checkbox`, `color`, `weight`, `photo`, `packed_by` | comma list of `checkbox` (tick box, on), `color` (on), `weight` (weight each, off), `photo` (off), `packed-by` (a "Packed by / Date" line after each person, off) |
+| `--parts-order` | parts list | `order` | `labels` (default), `heaviest`, `lightest`, `sheet`, `element` (element ID) |
+| `--parts-show` / `--parts-hide` | parts list | `photo`, `lego_color`, `bl_color`, `pieces`, `people`, `weight`, `total_weight`, `group_by_color` | comma list of `photo` (off), `lego-color`, `bl-color`, `pieces`, `people`, `weight` (each; on), `total-weight` (off), `group-by-color` (off) |
+| `--lots-show` / `--lots-hide` | lot counts | `lots`, `pieces`, `total_weight`, `totals` | comma list of `lots` (on), `pieces` (on), `total-weight` (off), `totals` (a totals row, off) |
+| `--lots-min-lots N` | lot counts | `min_lots` | leave out people with fewer than N lots (0–9999, default 0) |
+| `--report-options FILE` | all three | the whole `report_options` object | a JSON file in the web app's format, e.g. a design saved on the site |
+
+In the comma lists, `-` and `_` are interchangeable. Names are the web
+option names, with `_` written as `-`. A feature is turned on with `-show`
+and off with `-hide`; naming one in both is an error. `--sort-by` sets the
+people order for the checklist and lot counts (overriding a `sort` in the
+file).
+
+`--report-options FILE` takes the JSON the web app stores, e.g.
+`{"checklist": {"layout": "continuous", "weight": true}, "parts": {"order": "heaviest"}}`.
+Like the web app, it keeps only known keys and clamps or resets anything
+out of range; the `zip` section is ignored. A missing or malformed file is an error.
+Flags override the file, which overrides the defaults. Titles, paper and
+orientation given as flags apply to all three reports; in a file each
+report has its own.
+
+"Same as the labels" follows the label order, including `--keep-parts
+optimize`. Text is never cut off: long values wrap.
+
+```
+.venv/bin/python main.py --sample --parts --parts-order element --parts-show total-weight,group-by-color
+.venv/bin/python main.py --sample --checklist --paper a4 --checklist-layout continuous --checklist-show packed-by
+.venv/bin/python main.py --sample --lot-counts --lots-show totals --lots-min-lots 2 --report-title "Spring swap"
+```
 
 Run `--validate` first on a new or freshly-edited sheet — it catches
 data-entry mistakes (like a quantity typed as `"2,ooo"` instead of
@@ -320,7 +367,8 @@ cp label_specs.json ../lugbulk-labels-web/data/   # keep the web app in step
 | `packing.py` | `--keep-parts optimize`: exact bin packing of parts onto sheets (a port of the web app's `static/js/packing.js`; `tools/packing_golden.mjs` regenerates the parity fixture) |
 | `bricklink.py` | Reads BrickLink's catalog download files — weights and colors |
 | `render_labels.py` | Draws each label (thumbnail, text, layout), lays out the PDF, prefetches and outlines images |
-| `manifest.py` | Builds the summary/manifest report, lot-count and parts-list CSV/PDF |
+| `manifest.py` | Builds the summary/manifest report, lot-count, parts-list and checklist CSV/PDF |
+| `report_options.py` | The report options and their flags (a port of the web app's `report_options.js`) |
 | `config.py` | Shared/non-sensitive config (header names, label stock lookup, output paths) |
 | `label_specs.json` | Avery/Dymo label stock inventory (generated) |
 | `tools/update_label_specs.py` | Regenerates `label_specs.json` from gLabels |
