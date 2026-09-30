@@ -6,19 +6,37 @@ started. It's only required for the Google Sheets path; --source-file runs
 work without it.
 """
 
+import importlib.util
 import os
 import sys
 
-if getattr(sys, "frozen", False):
-    # A packaged release binary: look for config_local.py in the current
-    # directory and next to the executable, like the rest of the files it
-    # uses (service_account.json, image_cache/, outputs).
-    sys.path[:0] = [os.getcwd(), os.path.dirname(sys.executable)]
 
-try:
-    import config_local
-except ImportError:
-    config_local = None
+def _load_config_local():
+    """config_local.py is Python and runs when loaded — only ever put one
+    you wrote (or trust) next to the program.
+
+    A packaged release binary looks in the current directory, then next to
+    the executable, and loads exactly that file. It deliberately does not
+    add those folders to the import path: otherwise any stray .py file in
+    the folder you run from (a Downloads folder, say) could be imported in
+    place of one of the program's own modules."""
+    if not getattr(sys, "frozen", False):
+        try:
+            import config_local
+            return config_local
+        except ImportError:
+            return None
+    for folder in (os.getcwd(), os.path.dirname(sys.executable)):
+        path = os.path.join(folder, "config_local.py")
+        if os.path.isfile(path):
+            spec = importlib.util.spec_from_file_location("config_local", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    return None
+
+
+config_local = _load_config_local()
 
 SHEET_ID = getattr(config_local, "SHEET_ID", "")
 # Per-element fixes applied on top of the sheet's own color columns, keyed
