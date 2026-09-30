@@ -196,6 +196,7 @@ the other is looked up in `colors.py`. A color it doesn't know shows as an
 | `--test-page` | Write `alignment_test.pdf` — the label outlines for `--label-spec` — to print on plain paper and hold against the label stock, then exit. |
 | `--parts` | Write `parts.csv` and `parts.pdf`: one row per part, in label order, with total pieces, how many people ordered it, and its weight. No images needed; combine with `--lot-counts` for both. |
 | `--part-order {heaviest,lightest,sheet}` | Order of parts on the labels and parts list (default: `heaviest`). |
+| `--keep-parts {off,optimize}` | `optimize`: arrange the labels so no part is split across two sheets, on the fewest sheets possible — an exact search for combinations of parts that fill each sheet, keeping as close to the part order as it can (empty slots are left blank). A part bigger than a sheet fills whole sheets and only its remainder is fitted in with others. Prints sheets, blanks and parts split with and without it. Same behavior as the web app's "Keep each part on one sheet". Default `off`. |
 | `--per-person` | Also write one label PDF per person into `labels_by_person/`, alongside the combined `labels.pdf`. |
 | `--bricklink-dir DIR` | Folder with BrickLink's catalog files (default `bricklink/`). |
 | `--no-bricklink` | Ignore BrickLink's catalog files even if present. |
@@ -316,6 +317,7 @@ cp label_specs.json ../lugbulk-labels-web/data/   # keep the web app in step
 | `colors.py` | LEGO <-> BrickLink color name table |
 | `samples.py` | Built-in sample orders for `--sample` (and the web preview) |
 | `ordering.py` | Part weight estimates, label order, "N of M" numbering, per-part summaries |
+| `packing.py` | `--keep-parts optimize`: exact bin packing of parts onto sheets (a port of the web app's `static/js/packing.js`; `tools/packing_golden.mjs` regenerates the parity fixture) |
 | `bricklink.py` | Reads BrickLink's catalog download files — weights and colors |
 | `render_labels.py` | Draws each label (thumbnail, text, layout), lays out the PDF, prefetches and outlines images |
 | `manifest.py` | Builds the summary/manifest report, lot-count and parts-list CSV/PDF |
